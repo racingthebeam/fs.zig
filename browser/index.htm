@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <title>FS-WASM Test</title>
+    <script type="module">
+      function blockChanged(deviceId, block) {
+        console.log("block changed %d:%d", deviceId, block);
+      }
+
+      // TODO: maintain local cache of block device stats
+      class FileSystems {
+        #api;
+        #mem;
+        #blockDevices = new Map();
+        
+        constructor(instance) {
+          this.#api = instance.exports;
+          this.#mem = instance.exports.memory;
+
+          this.#api.init();
+          
+          console.log(this.#api);
+        }
+
+        //
+        // Block Device Management
+
+        createBlockDevice(blockSize, blockCount) {
+          const id = this.#api.createBlockDevice(blockSize, blockCount);
+          this.#checkStatus(id);
+          this.#blockDevices.set(id, {size: blockSize, count: blockCount});
+          return id;
+        }
+
+        destroyBlockDevice(deviceId) {
+          const status = this.#api.destroyBlockDevice(deviceId);
+          this.#checkStatus(status);
+          this.#blockDevices.delete(id);
+        }
+
+        //
+        // Block Device Access
+
+        readBlock(dst, deviceId, block) {
+          this.#assertDeviceExists(deviceId, dst.length);
+          this.#checkStatus(this.#api.readBlock(deviceId, block));
+          this.#copyFromShutBuf(dst); 
+        }
+
+        writeBlock(deviceId, block, src) {
+          this.#assertDeviceExists(deviceId, src.length);
+          this.#copyToShutBuf(src);
+          this.#checkStatus(this.#api.writeBlock(deviceId, block));
+        }
+
+        zeroBlock(deviceId, block) {
+          this.#checkStatus(this.#api.zeroBlock(deviceId, block)); 
+        }
+
+        //
+        // File System Management
+
+        formatFS(deviceId, inodeBlockCount) {
+          this.#assertDeviceExists(deviceId);
+          const id = this.#checkStatus(this.#api.fileSystemFormat(deviceId, inodeBlockCount));
+          return this.#getShuttleBufferBytes(16);
+        }
+
+        initFS(deviceId, config) {
+          if (config.length !== 16) {
+            throw new Error(`FS config must be exactly 16 bytes`);
+          }
+          this.#copyToShutBuf(config);
+          return this.#checkStatus(this.#api.fileSystemInit(deviceId));
+        }
+
+        destroyFS(fsId) {
+          return this.#checkStatus(this.#api.fileSystemDestroy(fsId)); 
+        }
+
+        //
+        // File System Access
+
+        //
+        // Internals
+
+        #assertDeviceExists(id, expectedBlockSize = null) {
+          const device = this.#blockDevices.get(id);
+          if (!device) throw new Error(`unknown block device ${id}`);
+          if (expectedBlockSize !== null && expectedBlockSize !== device.size) {
+            throw new Error(`incorrect block size for device ${id} (expected=${expectedBlockSize}, actual=${device.size})`);
+          }
+        }
+
+        #checkStatus(status) {
+          if (status < 0) {
+            // TODO: proper error type
+            throw new Error(`status: ${status}`);
+          }
+          return status;
+        }
+
+        #copyToShutBuf(src) {
+          this.#getShuttleBuffer().set(src, 0);
+        }
+
+        #copyFromShutBuf(dst) {
+          dst.set(this.#getShuttleBuffer().slice(0, dst.length), 0);
+        }
+
+        #getShuttleBuffer() {
+          return new Uint8Array(this.#mem.buffer, this.#api.getShuttleBufferPtr(), this.#api.getShuttleBufferSize());
+        }
+        
+        #getShuttleBufferBytes(count) {
+          const out = new Uint8Array(count);
+          out.set(this.#getShuttleBuffer().slice(0, count), 0);
+          return out;
+        }
+      }
+
+      WebAssembly.instantiateStreaming(fetch("../build/fs.wasm"), {
+        env: {
+          notifyBlockChanged: blockChanged
+        }
+      }).then((obj) => {
+        const theFS = new FileSystems(obj.instance);
+
+        const id = theFS.createBlockDevice(512, 1024);
+        console.log(`Created block device, ID=${id}`);
+
+        const config = theFS.formatFS(id, 32);
+        console.log(config);
+
+        const fs = theFS.initFS(id, config);
+        console.log(fs);
+      });
+    </script>
+  </head>
+  <body>
+    <h1>FS-WASM Test</h1> 
+  </body>
+</html>

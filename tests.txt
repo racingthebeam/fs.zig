@@ -1,0 +1,3 @@
+@begin emptyDirectoryIteration
+Number of files in root: 0
+@end

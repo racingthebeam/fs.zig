@@ -1,0 +1,11 @@
+#!/bin/bash
+
+mkdir -p build
+
+zig \
+    build-exe \
+    -target wasm32-freestanding \
+    -O ReleaseSmall \
+    -femit-bin=build/fs.wasm \
+    -fno-entry -rdynamic \
+    src/root.zig
