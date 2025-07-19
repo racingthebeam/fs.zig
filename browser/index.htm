@@ -8,15 +8,61 @@
         console.log("block changed %d:%d", deviceId, block);
       }
 
-      // TODO: maintain local cache of block device stats
-      class FileSystems {
-        #api;
+      class MemoryRegion {
         #mem;
-        #blockDevices = new Map();
+        #buf = null;
+        #ary = null;
+
+        constructor(memory, offset, length) {
+          this.#mem = memory;
+          this.offset = offset;
+          this.length = length;
+        }
+
+        get view() {
+          this.#reset(); 
+          return this.#ary;
+        }
+
+        get() {
+          this.#reset(); 
+          return this.#ary;
+        }
+
+        read(dst) {
+          this.#reset();
+          dst.set(this.#ary.subarray(0, dst.length), 0);
+        }
+
+        write(src) {
+          this.#reset();
+          this.#ary.subarray(0, src.length).set(src, 0);
+        }
+
+        #reset() {
+          if (this.#buf !== this.#mem.buffer) {
+            this.#buf = this.#mem.buffer;
+            this.#ary = new Uint8Array(this.#buf, this.offset, this.length);
+          }
+        }
+      }
+
+      const E_NOENT = -7;
+
+      class FileSystems {
+        #api;                         // WASM functions
+        #mem;                         // WASM memory
+        #shuttle;                     // memory region for transferring data blocks to/from WASM
+        #str;                         // memory region for transferring input strings to WASM
+        #strPtr = 0;                  // string write pointer
+        #strEnc = new TextEncoder();
+        #blockDevices = new Map();    // active block devices
         
         constructor(instance) {
           this.#api = instance.exports;
           this.#mem = instance.exports.memory;
+          this.#shuttle = new MemoryRegion(instance.exports.memory, this.#api.getShuttleBufferPtr(), this.#api.getShuttleBufferSize());
+          this.#str = new MemoryRegion(instance.exports.memory, this.#api.getStringBufferPtr(), this.#api.getStringBufferSize());
 
           this.#api.init();
           
@@ -45,12 +91,12 @@
         readBlock(dst, deviceId, block) {
           this.#assertDeviceExists(deviceId, dst.length);
           this.#checkStatus(this.#api.readBlock(deviceId, block));
-          this.#copyFromShutBuf(dst); 
+          this.#shuttle.read(dst);
         }
 
         writeBlock(deviceId, block, src) {
           this.#assertDeviceExists(deviceId, src.length);
-          this.#copyToShutBuf(src);
+          this.#shuttle.write(src);
           this.#checkStatus(this.#api.writeBlock(deviceId, block));
         }
 
@@ -64,14 +110,14 @@
         formatFS(deviceId, inodeBlockCount) {
           this.#assertDeviceExists(deviceId);
           const id = this.#checkStatus(this.#api.fileSystemFormat(deviceId, inodeBlockCount));
-          return this.#getShuttleBufferBytes(16);
+          return this.#shuttle.view.slice(0, 16);
         }
 
         initFS(deviceId, config) {
           if (config.length !== 16) {
             throw new Error(`FS config must be exactly 16 bytes`);
           }
-          this.#copyToShutBuf(config);
+          this.#shuttle.write(config);
           return this.#checkStatus(this.#api.fileSystemInit(deviceId));
         }
 
@@ -81,6 +127,33 @@
 
         //
         // File System Access
+
+        lookup(fsId, inode, name) {
+          this.#resetStringBuffer();
+          const {ptr, len} = this.#writeString(name);
+          const res = this.#api.fsLookup(fsId, inode, ptr, len);
+          if (res === E_NOENT) return null;
+          return this.#checkStatus(res);
+        }
+
+        exists(fsId, inode, name) {
+          this.#resetStringBuffer();
+          const {ptr, len} = this.#writeString(name);
+          const res = this.#api.fsExists(fsId, inode, ptr, len);
+          return this.#checkStatus(res) > 0;
+        }
+
+        mkdir(fsId, inode, name) {
+          this.#resetStringBuffer();
+          const {ptr, len} = this.#writeString(name);
+          return this.#checkStatus(this.#api.fsMkdir(fsId, inode, ptr, len));
+        }
+
+        rmdir(fsId, inode, name) {
+          this.#resetStringBuffer();
+          const {ptr, len} = this.#writeString(name);
+          return this.#checkStatus(this.#api.fsRmdir(fsId, inode, ptr, len));
+        }
 
         //
         // Internals
@@ -101,21 +174,18 @@
           return status;
         }
 
-        #copyToShutBuf(src) {
-          this.#getShuttleBuffer().set(src, 0);
+        //
+        // String encoding
+
+        #resetStringBuffer() {
+          this.#strPtr = 0;
         }
 
-        #copyFromShutBuf(dst) {
-          dst.set(this.#getShuttleBuffer().slice(0, dst.length), 0);
-        }
-
-        #getShuttleBuffer() {
-          return new Uint8Array(this.#mem.buffer, this.#api.getShuttleBufferPtr(), this.#api.getShuttleBufferSize());
-        }
-        
-        #getShuttleBufferBytes(count) {
-          const out = new Uint8Array(count);
-          out.set(this.#getShuttleBuffer().slice(0, count), 0);
+        // Write a string to WASM memory and return the pointer/length so it can
+        #writeString(str) {
+          const res = this.#strEnc.encodeInto(str, this.#str.view.subarray(this.#strPtr));
+          const out = {ptr: this.#str.offset + this.#strPtr, len: res.written};
+          this.#strPtr += res.written;
           return out;
         }
       }
@@ -127,14 +197,25 @@
       }).then((obj) => {
         const theFS = new FileSystems(obj.instance);
 
-        const id = theFS.createBlockDevice(512, 1024);
-        console.log(`Created block device, ID=${id}`);
+        const deviceId = theFS.createBlockDevice(512, 1024);
+        console.log(`Created block device, ID=${deviceId}`);
 
-        const config = theFS.formatFS(id, 32);
-        console.log(config);
+        const fsConfig = theFS.formatFS(deviceId, 32);
+        console.log(fsConfig);
 
-        const fs = theFS.initFS(id, config);
-        console.log(fs);
+        const fsId = theFS.initFS(deviceId, fsConfig);
+        
+        console.log("lookup foo", theFS.lookup(fsId, 0, "test-1"));
+        console.log("exists foo", theFS.exists(fsId, 0, "test-1"));
+        
+        console.log(theFS.mkdir(fsId, 0, "test-1"));
+        console.log(theFS.mkdir(fsId, 0, "test-2"));
+
+        console.log("lookup foo", theFS.lookup(fsId, 0, "test-1"));
+        console.log("exists foo", theFS.exists(fsId, 0, "test-1"));
+
+        console.log("lookup bar", theFS.lookup(fsId, 0, "test-2"));
+        console.log("exists bar", theFS.exists(fsId, 0, "test-2"));
       });
     </script>
   </head>

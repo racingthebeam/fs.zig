@@ -137,7 +137,7 @@ pub const FileSystem = struct {
     //
     // MARK: Public Interface
 
-    pub fn exists(self: *@This(), dir: P.InodePtr, filename: []const u8) !bool {
+    pub fn lookup(self: *@This(), dir: P.InodePtr, filename: []const u8) !?P.InodePtr {
         var fd = I.FileFd{};
         try self.openInternal(@truncate(dir), &fd, true);
         defer self.closeInternal(&fd) catch @panic("closeInternal() failed");
@@ -145,14 +145,18 @@ pub const FileSystem = struct {
         var ent = I.DirEnt{};
         while (try self.readDirInternal(&ent, &fd, false)) {
             if (ent.isName(filename)) {
-                return true;
+                return ent.inode;
             }
         }
 
-        return false;
+        return null;
     }
 
-    pub fn mkdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
+    pub fn exists(self: *@This(), dir: P.InodePtr, filename: []const u8) !bool {
+        return (try self.lookup(dir, filename)) != null;
+    }
+
+    pub fn mkdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !P.InodePtr {
         if (filename.len > I.MaxFilenameLen) {
             return P.Error.InvalidFileName;
         }
@@ -164,7 +168,7 @@ pub const FileSystem = struct {
         var free_offset: ?u32 = null;
         var ent = I.DirEnt{};
         while (try self.readDirInternal(&ent, &fd, true)) {
-            std.debug.print("reading entry at offset {}", .{fd.abs_offset - I.DirEntSize});
+            // std.debug.print("reading entry at offset {}", .{fd.abs_offset - I.DirEntSize});
             if (ent.name[0] == 0 and free_offset == null) {
                 free_offset = fd.abs_offset - I.DirEntSize;
             } else if (ent.isName(filename)) {
@@ -183,7 +187,7 @@ pub const FileSystem = struct {
         const index_ptr = blocks[0];
         const data_ptr = blocks[1];
 
-        std.debug.print("ALLOCATED BLOCKS index={} data={}\n", .{ index_ptr, data_ptr });
+        // std.debug.print("ALLOCATED BLOCKS index={} data={}\n", .{ index_ptr, data_ptr });
 
         const index = self.blk_pool.take();
         defer self.blk_pool.give(index);
@@ -202,7 +206,7 @@ pub const FileSystem = struct {
             .mtime = 0,
         }) orelse @panic("boom");
 
-        std.debug.print("INODE: {}\n", .{inode});
+        // std.debug.print("INODE: {}\n", .{inode});
 
         //
         // Write the new entry to the directory
@@ -211,6 +215,8 @@ pub const FileSystem = struct {
         @memcpy(buffer[0..filename.len], filename);
         writeBE(u16, buffer[I.DirEntSize - 2 .. I.DirEntSize], inode);
         _ = try self.writeInternal(&fd, &buffer);
+
+        return inode;
     }
 
     pub fn rmdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
@@ -296,8 +302,8 @@ pub const FileSystem = struct {
             .deep = false,
         };
 
-        std.debug.print("File opened (inode={}, root_blk={}, size={}):\n", .{ fd.file.inode_ptr, fd.file.root_blk, fd.file.size });
-        std.debug.print("  root={}:{} mid={}:{} data={}:{}\n", .{ fd.root.blk, fd.root.offset, fd.mid.blk, fd.mid.offset, fd.data.blk, fd.data.offset });
+        // std.debug.print("File opened (inode={}, root_blk={}, size={}):\n", .{ fd.file.inode_ptr, fd.file.root_blk, fd.file.size });
+        // std.debug.print("  root={}:{} mid={}:{} data={}:{}\n", .{ fd.root.blk, fd.root.offset, fd.mid.blk, fd.mid.offset, fd.data.blk, fd.data.offset });
     }
 
     fn closeInternal(self: *@This(), fd: *I.FileFd) !void {
