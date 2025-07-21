@@ -85,12 +85,12 @@ pub const FileSystem = struct {
         // an auxiliary slice and a higher level OOB process takes care of
         // writing the data to the block device.
         @memset(config_out, 0);
-        config_out[0] = P.FsTypeId;
+        config_out[0] = P.FS_TYPE_ID;
         config_out[1] = @truncate((inode_blk_count / BLOCK_COUNT_MULTIPLIER) - 1);
     }
 
     pub fn init(allocator: Allocator, blk_dev: *bd.BlockDevice, config: []u8) !FileSystem {
-        if (config.len != 16 or config[0] != P.FsTypeId) {
+        if (config.len != 16 or config[0] != P.FS_TYPE_ID) {
             return P.Error.InvalidFSParams;
         }
 

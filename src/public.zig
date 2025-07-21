@@ -2,7 +2,7 @@ pub const Fd = u64;
 pub const InodePtr = u32;
 
 // unique ID that identifies this filesystem type
-pub const FsTypeId = 1;
+pub const FS_TYPE_ID = 1;
 
 pub const CREATE = 1;
 pub const SEEK_END = 2;
