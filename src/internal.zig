@@ -1,7 +1,7 @@
 const std = @import("std");
 const expect = std.testing.expect;
 
-const C = @import("./common.zig");
+const P = @import("public.zig");
 
 pub const Error = error{
     FSInternalError,
@@ -9,16 +9,83 @@ pub const Error = error{
     LimitsExceeded,
 };
 
-pub const Inode = C.Inode;
 pub const InodePtr = u16;
 pub const InodePtrSize = 2;
+pub const Inode = struct {
+    flags: u16 = 0,
+    data_blk: u16 = 0,
+    meta_blk: u16 = 0,
+    size: u32 = 0,
+    mtime: u32 = 0,
+
+    pub fn init() Inode {
+        return Inode{
+            .flags = undefined,
+            .data_blk = undefined,
+            .meta_blk = undefined,
+            .size = undefined,
+            .mtime = undefined,
+        };
+    }
+
+    pub fn isPresent(self: *const @This()) bool {
+        return self.flags != 0;
+    }
+
+    pub fn isDir(self: *const @This()) bool {
+        return (self.flags & Dir) > 0;
+    }
+
+    pub fn isFile(self: *const @This()) bool {
+        return (self.flags & File) > 0;
+    }
+};
 
 pub const BlockPtrSize = 2;
 
-pub const OpenFile = C.OpenFile;
-pub const FileFd = C.FileFd;
+// Represents the shared global state for an open file.
+// A file can have multiple active FileFds, but only ever
+// one OpenFile.
+pub const OpenFile = struct {
+    // inode ptr
+    inode_ptr: u16,
 
-pub const Ref = C.Ref;
+    root_blk: u16,
+
+    // current size of file
+    size: u32,
+
+    // was this file deleted while it was open?
+    deleted: bool = false,
+
+    // number of FileFd instances that reference this file
+    ref_count: u32 = 1,
+};
+
+pub const FileFd = struct {
+    file: *OpenFile = undefined,
+    flags: u32 = undefined,
+
+    root: Ref = undefined, // position in the root block
+    mid: Ref = undefined, // position in the indirect block (only valid when deep == true)
+    data: Ref = undefined, // position in the data block
+    abs_offset: u32 = undefined,
+    deep: bool = undefined,
+
+    pub fn isReadable(self: *FileFd) bool {
+        return self.flags & P.READ > 0;
+    }
+
+    pub fn isWritable(self: *FileFd) bool {
+        return self.flags & P.WRITE > 0;
+    }
+};
+
+// Ref is a pointer to a specific byte on disk, expressed in terms of block:offset.
+pub const Ref = struct {
+    blk: u32 = 0,
+    offset: u32 = 0,
+};
 
 pub const MaxFilenameLen = 14;
 
