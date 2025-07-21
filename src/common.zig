@@ -1,5 +1,7 @@
 // Public error types
 
+const P = @import("public.zig");
+
 pub const MaxPathComponentLen = 16;
 
 pub const INode = u32;
@@ -89,19 +91,12 @@ pub const FileFd = struct {
     abs_offset: u32 = undefined,
     deep: bool = undefined,
 
-    // Initialize a FileFd with the given handle, open file, and flags.
-    // The root, mid, and data pointers are zeroed.
-    pub fn init(file: *OpenFile, flags: OpenFlags) FileFd {
-        return FileFd{
-            .file = file,
-            .flags = flags,
+    pub fn isReadable(self: *FileFd) bool {
+        return self.flags & P.READ > 0;
+    }
 
-            .root = Ref{},
-            .mid = Ref{},
-            .data = Ref{},
-            .abs_offset = 0,
-            .deep = false,
-        };
+    pub fn isWritable(self: *FileFd) bool {
+        return self.flags & P.WRITE > 0;
     }
 };
 

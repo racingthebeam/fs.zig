@@ -15,8 +15,11 @@ const P = @import("public.zig");
 const I = @import("internal.zig");
 const Ref = I.Ref;
 
+const Seq = @import("seq.zig").Seq;
+
 pub const FileSystem = struct {
     const OpenFiles = std.AutoHashMap(I.InodePtr, *I.OpenFile);
+    const FileHandles = std.AutoHashMap(P.Fd, *I.FileFd);
 
     allocator: Allocator,
     blk_dev: *bd.BlockDevice,
@@ -25,6 +28,8 @@ pub const FileSystem = struct {
     freelist: FreeList,
     blk_pool: BlockPool,
     open_files: OpenFiles,
+    file_handles: FileHandles,
+    seq: Seq,
 
     // cached block size
     blk_size: u32,
@@ -34,8 +39,6 @@ pub const FileSystem = struct {
 
     // number of file pointers that can be stored in one block
     pointers_per_block: u32,
-
-    // MARK: Init
 
     pub fn format(allocator: Allocator, blk_dev: *bd.BlockDevice, inode_blk_count: u32, config_out: []u8) !void {
         if ((inode_blk_count % BLOCK_COUNT_MULTIPLIER != 0) or (config_out.len != 16)) {
@@ -71,16 +74,7 @@ pub const FileSystem = struct {
 
         // finally, allocate an inode, ensure it's zero, because the root directory is
         // always pointed to by inode zero.
-
-        const inode = I.Inode{
-            .flags = I.Dir,
-            .data_blk = @truncate(root_index_blk),
-            .meta_blk = 0,
-            .size = 0,
-            .mtime = 0,
-        };
-
-        const root_inode = inodes.create(&inode) orelse @panic("failed to create root inode");
+        const root_inode = inodes.create(true, @truncate(root_index_blk)) orelse @panic("failed to create root inode");
         std.debug.assert(root_inode == 0);
 
         // Store the FS config in the output slice
@@ -118,6 +112,8 @@ pub const FileSystem = struct {
             .freelist = freelist,
             .blk_pool = BlockPool.init(allocator, blk_dev.blk_size),
             .open_files = OpenFiles.init(allocator),
+            .file_handles = FileHandles.init(allocator),
+            .seq = Seq.init(),
 
             .blk_size = blk_dev.blk_size,
             .indirect_offset_threshold = (blk_dev.blk_size / 4) * blk_dev.blk_size,
@@ -132,28 +128,65 @@ pub const FileSystem = struct {
         self.freelist.deinit();
         self.blk_pool.deinit();
         self.open_files.deinit();
+        self.file_handles.deinit();
     }
 
-    //
-    // MARK: Public Interface
-
     pub fn lookup(self: *@This(), dir: P.InodePtr, filename: []const u8) !?P.InodePtr {
-        var fd = I.FileFd{};
-        try self.openInternal(@truncate(dir), &fd, true);
-        defer self.closeInternal(&fd) catch @panic("closeInternal() failed");
+        var dir_fd = I.FileFd{};
+        try self.openInternal(@truncate(dir), &dir_fd, true, P.READ);
+        defer self.closeInternal(&dir_fd);
 
-        var ent = I.DirEnt{};
-        while (try self.readDirInternal(&ent, &fd, false)) {
-            if (ent.isName(filename)) {
-                return ent.inode;
-            }
+        const res = try self.findInode(&dir_fd, filename);
+        if (res.inode) |inode| {
+            return inode;
+        } else {
+            return null;
         }
-
-        return null;
     }
 
     pub fn exists(self: *@This(), dir: P.InodePtr, filename: []const u8) !bool {
         return (try self.lookup(dir, filename)) != null;
+    }
+
+    pub fn open(self: *@This(), dir: P.InodePtr, filename: []const u8, flags: u32) !P.Fd {
+        const create = (flags & P.CREATE) > 0;
+
+        var dir_open_flags: u32 = P.READ;
+        if (create) {
+            dir_open_flags |= P.WRITE;
+        }
+
+        var dir_fd = I.FileFd{};
+        try self.openInternal(@truncate(dir), &dir_fd, true, dir_open_flags);
+        defer self.closeInternal(&dir_fd) catch @panic("closeInternal() failed");
+
+        const res = try self.findInode(&dir_fd, filename);
+        if (res.inode) |inode| {
+            return self.openFileExisting(inode, flags);
+        } else if (!create) {
+            return P.Error.NoEnt;
+        } else {
+            return self.openFileCreate(&dir_fd, filename, flags, res.free_offset);
+        }
+    }
+
+    fn openFileExisting(self: *@This(), inode_ptr: I.InodePtr, flags: u32) !P.Fd {
+        const file = self.allocator.create(I.FileFd) catch |err| I.oom(err);
+        errdefer self.allocator.destroy(file);
+        try self.openInternal(inode_ptr, file, false, flags);
+        const fd = self.seq.take();
+        self.file_handles.put(fd, file) catch |err| I.oom(err);
+        return fd;
+    }
+
+    fn openFileCreate(self: *@This(), fd: *I.FileFd, filename: []const u8, flags: u32, free_offset: ?u32) !P.Fd {
+        // flags to handle: none
+        _ = self;
+        _ = fd;
+        _ = filename;
+        _ = flags;
+        _ = free_offset;
+        return 0;
     }
 
     pub fn mkdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !P.InodePtr {
@@ -162,54 +195,17 @@ pub const FileSystem = struct {
         }
 
         var fd = I.FileFd{};
-        try self.openInternal(@truncate(dir), &fd, true);
-        defer self.closeInternal(&fd) catch @panic("closeInternal() failed");
+        try self.openInternal(@truncate(dir), &fd, true, P.READ | P.WRITE);
+        defer self.closeInternal(&fd);
 
-        var free_offset: ?u32 = null;
-        var ent = I.DirEnt{};
-        while (try self.readDirInternal(&ent, &fd, true)) {
-            // std.debug.print("reading entry at offset {}", .{fd.abs_offset - I.DirEntSize});
-            if (ent.name[0] == 0 and free_offset == null) {
-                free_offset = fd.abs_offset - I.DirEntSize;
-            } else if (ent.isName(filename)) {
-                return P.Error.Exists;
-            }
-        }
-
-        if (free_offset) |fo| {
+        const res = try self.findInode(&fd, filename);
+        if (res.inode) |_| {
+            return P.Error.Exists;
+        } else if (res.free_offset) |fo| {
             try self.seek(&fd, fo);
         }
 
-        //
-        // Set up the file for the new directory
-
-        const blocks = try self.alloc2();
-        const index_ptr = blocks[0];
-        const data_ptr = blocks[1];
-
-        // std.debug.print("ALLOCATED BLOCKS index={} data={}\n", .{ index_ptr, data_ptr });
-
-        const index = self.blk_pool.take();
-        defer self.blk_pool.give(index);
-        try self.blk_dev.readBlock(index, index_ptr);
-        writeBE(u16, index[0..2], @truncate(data_ptr));
-        self.blk_dev.writeBlock(index_ptr, index);
-
-        //
-        // Allocate the inode
-
-        const inode = self.inodes.create(&I.Inode{
-            .flags = I.Dir,
-            .data_blk = @truncate(index_ptr),
-            .meta_blk = 0,
-            .size = 0,
-            .mtime = 0,
-        }) orelse @panic("boom");
-
-        // std.debug.print("INODE: {}\n", .{inode});
-
-        //
-        // Write the new entry to the directory
+        const inode = try self.createFile(true);
 
         var buffer = [_]u8{0} ** I.DirEntSize;
         @memcpy(buffer[0..filename.len], filename);
@@ -221,8 +217,8 @@ pub const FileSystem = struct {
 
     pub fn rmdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
         var fd = I.FileFd{};
-        try self.openInternal(@truncate(dir), &fd, true);
-        defer self.closeInternal(&fd) catch @panic("closeInternal() failed");
+        try self.openInternal(@truncate(dir), &fd, true, P.READ);
+        defer self.closeInternal(&fd);
 
         // Find entry in dir
 
@@ -239,19 +235,18 @@ pub const FileSystem = struct {
             return P.Error.NoEnt;
         }
 
-        // Read inode and free it
+        // Free inode and delete file contents
 
-        var inode = I.Inode.init();
-        self.inodes.mustRead(&inode, ent.inode);
-        self.inodes.give(ent.inode);
+        // TODO: this needs to take account of open state etc.
 
-        // Purge file contents
-
-        _ = self.purgeFile(inode.data_blk, true);
+        const content_ptrs = self.inodes.mustFree(ent.inode);
+        _ = self.purgeFileContents(content_ptrs[0]);
 
         // Clear directory entry
 
-        try self.seek(&fd, fd.abs_offset - I.DirEntSize);
+        self.seek(&fd, fd.abs_offset - I.DirEntSize) catch {
+            @panic("internal error - seek failed when clearing directory entry");
+        };
         var zeroes = [_]u8{0} ** I.DirEntSize;
         _ = try self.writeInternal(&fd, &zeroes);
     }
@@ -259,27 +254,70 @@ pub const FileSystem = struct {
     //
     //
 
-    // TODO: this needs to accept flags
-    // TODO: create (inc inode creation), truncate, move to end
-    fn openInternal(self: *@This(), ptr: I.InodePtr, fd: *I.FileFd, dir: bool) !void {
+    // Find an entry in the given directory
+    // If the entry is found, return inode will be set in return value.
+    // If entry was not found, and there was an empty entry in the dir, this will be
+    // reported in free_offset.
+    fn findInode(self: *@This(), fd: *I.FileFd, filename: []const u8) !struct { inode: ?I.InodePtr, free_offset: ?u32 } {
+        var free_offset: ?u32 = null;
+        var ent = I.DirEnt{};
+        while (try self.readDirInternal(&ent, fd, true)) {
+            if (ent.name[0] == 0 and free_offset == null) {
+                free_offset = fd.abs_offset - I.DirEntSize;
+            } else if (ent.isName(filename)) {
+                return .{ .inode = ent.inode, .free_offset = free_offset };
+            }
+        }
+        return .{ .inode = null, .free_offset = free_offset };
+    }
+
+    // Create an empty file with index/data blocks, returning the inode.
+    fn createFile(self: *@This(), is_dir: bool) error{ NoFreeBlocks, NoFreeInodes }!I.InodePtr {
+        const blocks = try self.alloc2();
+        const index_ptr = blocks[0];
+        const data_ptr = blocks[1];
+
+        errdefer {
+            self.freelist.free(index_ptr);
+            self.freelist.free(data_ptr);
+        }
+
+        self.patchBlockBE(u16, index_ptr, 0, @truncate(data_ptr));
+
+        const inode = self.inodes.create(is_dir, @truncate(index_ptr));
+        if (inode) |i| {
+            return i;
+        } else {
+            return P.Error.NoFreeInodes;
+        }
+    }
+
+    fn openInternal(self: *@This(), ptr: I.InodePtr, fd: *I.FileFd, dir: bool, flags: u32) !void {
         var inode = I.Inode{};
         if (!self.inodes.read(&inode, ptr)) {
-            return P.Error.NoEnt;
+            @panic("internal error - failed to read inode in openInternal()");
         }
 
-        if (inode.isDir() != dir) {
-            // TODO: ??? error
+        if (!dir and inode.isDir()) {
+            return P.Error.IsDir;
+        } else if (dir and !inode.isDir()) {
+            return P.Error.NotDir;
         }
 
-        const scratch = self.blk_pool.take();
-        defer self.blk_pool.give(scratch);
-        try self.blk_dev.readBlock(scratch, inode.data_blk);
+        const index_dat = self.blk_pool.take();
+        defer self.blk_pool.give(index_dat);
+        self.blk_dev.readBlock(index_dat, inode.data_blk) catch |err| I.noBlock2(err);
 
         const open_file = if (self.open_files.get(ptr)) |ex| block: {
+            // can't truncate file if it's already open
+            // this limitation may be removed in the future but for now it's more complex to deal with than it's worth.
+            if ((flags & P.TRUNCATE) > 0) {
+                return P.Error.Busy;
+            }
             ex.ref_count += 1;
             break :block ex;
         } else block: {
-            const of = try self.allocator.create(I.OpenFile);
+            const of = self.allocator.create(I.OpenFile) catch |err| I.oom(err);
             errdefer self.allocator.destroy(of);
             of.* = I.OpenFile{
                 .inode_ptr = ptr,
@@ -288,25 +326,41 @@ pub const FileSystem = struct {
                 .deleted = false,
                 .ref_count = 1,
             };
-            try self.open_files.put(ptr, of);
+            self.open_files.put(ptr, of) catch |err| I.oom(err);
             break :block of;
         };
 
         fd.* = I.FileFd{
             .file = open_file,
-            .flags = 0,
+            .flags = flags,
             .root = Ref{ .blk = inode.data_blk, .offset = 0 },
             .mid = Ref{ .blk = 0, .offset = 0 },
-            .data = Ref{ .blk = readBE(u16, scratch[0..2]), .offset = 0 },
+            .data = Ref{ .blk = readBE(u16, index_dat[0..2]), .offset = 0 },
             .abs_offset = 0,
             .deep = false,
         };
+
+        if ((flags & P.TRUNCATE) != 0) {
+            _ = self.truncateFileContents(open_file.root_blk);
+            self.inodes.update(ptr, 0, null);
+            open_file.size = 0;
+        }
+
+        if ((flags & P.SEEK_END) != 0) {
+            self.seek(fd, open_file.size) catch |err| {
+                // this construct is here so that compilation will fail if seeks() error set
+                // is ever expanded.
+                switch (err) {
+                    error.InvalidOffset => @panic("SEEK_END failed with invalid offset - this is a bug"),
+                }
+            };
+        }
 
         // std.debug.print("File opened (inode={}, root_blk={}, size={}):\n", .{ fd.file.inode_ptr, fd.file.root_blk, fd.file.size });
         // std.debug.print("  root={}:{} mid={}:{} data={}:{}\n", .{ fd.root.blk, fd.root.offset, fd.mid.blk, fd.mid.offset, fd.data.blk, fd.data.offset });
     }
 
-    fn closeInternal(self: *@This(), fd: *I.FileFd) !void {
+    fn closeInternal(self: *@This(), fd: *I.FileFd) void {
         const of = fd.*.file;
 
         of.*.ref_count -= 1;
@@ -315,9 +369,12 @@ pub const FileSystem = struct {
             const was_deleted = of.*.deleted;
             const removed = self.open_files.remove(of.*.inode_ptr);
             std.debug.assert(removed);
+
+            const inode_ptr = of.inode_ptr;
             self.allocator.destroy(of);
+
             if (was_deleted) {
-                // TODO: purge
+                self.purgeInode(inode_ptr);
             }
         }
     }
@@ -325,7 +382,9 @@ pub const FileSystem = struct {
     fn readInternal(self: *@This(), dst: []u8, fd: *I.FileFd) !struct { u32, bool } {
         const of = fd.file;
 
-        // TODO: check file is readable
+        if (!fd.isReadable()) {
+            return P.Error.NotReadable;
+        }
 
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
@@ -357,24 +416,28 @@ pub const FileSystem = struct {
     }
 
     fn readDirInternal(self: *@This(), dst: *I.DirEnt, fd: *I.FileFd, include_empty: bool) !bool {
-        var buf = [_]u8{0} ** 16;
+        var buf = [_]u8{0} ** I.DirEntSize;
         while (true) {
             const res = try self.readInternal(&buf, fd);
             if (res[1]) {
                 return false; // EOF
-            } else if (res[0] != 16) {
+            } else if (res[0] != I.DirEntSize) {
                 return I.Error.FSInternalError; // less than 16 bytes => invalid entry
             } else if (buf[0] == 0 and !include_empty) {
                 continue; // no entry (previously deleted)
             } else {
-                @memcpy(&dst.*.name, buf[0..14]);
-                dst.*.inode = readBE(u16, buf[14..16]);
+                @memcpy(&dst.*.name, buf[0..I.MaxFilenameLen]);
+                dst.*.inode = readBE(u16, buf[I.DirEntSize - 2 .. I.DirEntSize]);
                 return true;
             }
         }
     }
 
     fn writeInternal(self: *@This(), fd: *I.FileFd, buf: []u8) !u32 {
+        if (!fd.isWritable()) {
+            return P.Error.NotWritable;
+        }
+
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
@@ -399,7 +462,7 @@ pub const FileSystem = struct {
 
         if (fd.abs_offset > fd.file.size) {
             fd.file.size = fd.abs_offset;
-            try self.inodes.update(fd.file.inode_ptr, fd.file.size, null);
+            self.inodes.update(fd.file.inode_ptr, fd.file.size, null);
         }
 
         return bytes_written;
@@ -508,7 +571,7 @@ pub const FileSystem = struct {
     //
     // Seek
 
-    fn seek(self: *@This(), fd: *I.FileFd, abs_offset: u32) !void {
+    fn seek(self: *@This(), fd: *I.FileFd, abs_offset: u32) error{InvalidOffset}!void {
         const of = fd.file;
 
         if (abs_offset > of.*.size) {
@@ -516,15 +579,15 @@ pub const FileSystem = struct {
         }
 
         if (abs_offset < self.indirect_offset_threshold) {
-            try self.seekShallow(of, fd, abs_offset);
+            self.seekShallow(of, fd, abs_offset);
         } else {
-            try self.seekDeep(of, fd, abs_offset);
+            self.seekDeep(of, fd, abs_offset);
         }
 
         fd.*.abs_offset = abs_offset;
     }
 
-    fn seekShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) !void {
+    fn seekShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
@@ -535,7 +598,7 @@ pub const FileSystem = struct {
             .offset = offsets[0],
         };
 
-        try self.blk_dev.readBlock(scratch, root.blk);
+        self.blk_dev.readBlock(scratch, root.blk) catch |err| I.noBlock2(err);
 
         fd.*.deep = false;
         fd.*.root = root;
@@ -545,7 +608,7 @@ pub const FileSystem = struct {
         };
     }
 
-    fn seekDeep(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) !void {
+    fn seekDeep(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
@@ -556,14 +619,14 @@ pub const FileSystem = struct {
             .offset = offsets[0],
         };
 
-        try self.blk_dev.readBlock(scratch, root.blk);
+        self.blk_dev.readBlock(scratch, root.blk) catch |err| I.noBlock2(err);
 
         const indirect = I.Ref{
             .blk = readBE(u16, scratch[root.offset .. root.offset + I.BlockPtrSize]),
             .offset = offsets[1],
         };
 
-        try self.blk_dev.readBlock(scratch, indirect.blk);
+        self.blk_dev.readBlock(scratch, indirect.blk) catch |err| I.noBlock2(err);
 
         fd.*.deep = true;
         fd.*.root = root;
@@ -592,39 +655,45 @@ pub const FileSystem = struct {
     }
 
     //
-    // Purge
+    // Truncate/purge
 
-    // free all blocks used by the file whose index is rooted at index_blk,
-    // optionally including the index block itself.
-    // returns the number of blocks freed.
-    fn purgeFile(self: *@This(), index_blk: u32, free_index_blk: bool) u32 {
+    // truncate file to zero length, leaving first index block and first data block.
+    // note: this does not update the inode or any open files
+    fn truncateFileContents(self: *@This(), index_blk: u32) u32 {
         const index_dat = self.blk_pool.take();
         defer self.blk_pool.give(index_dat);
 
-        const l2_dat = self.blk_pool.take();
-        defer self.blk_pool.give(l2_dat);
+        self.blk_dev.readBlock(index_dat, index_blk) catch return I.noBlock();
+        var freed = self.freeReferencedBlocks(index_dat[2..(self.blk_size / 2)]);
+        freed += self.freeIndirectReferencedBlocks(index_dat[(self.blk_size / 2)..]);
+
+        // zero out the index block except for the first entry
+        @memset(index_dat[2..], 0);
+        self.blk_dev.writeBlock(index_blk, index_dat);
+
+        // zero the first data block
+        self.blk_dev.zeroBlock(readBE(u16, index_dat[0..2]));
+
+        return freed;
+    }
+
+    // free the inode and all of the data it points to
+    fn purgeInode(self: *@This(), inode_ptr: I.InodePtr) void {
+        const ptrs = self.inodes.mustFree(inode_ptr);
+        _ = self.purgeFileContents(ptrs[0]);
+    }
+
+    // free all blocks used by the file whose index is rooted at index_blk.
+    // returns the number of blocks freed.
+    fn purgeFileContents(self: *@This(), index_blk: u32) u32 {
+        const index_dat = self.blk_pool.take();
+        defer self.blk_pool.give(index_dat);
 
         self.blk_dev.readBlock(index_dat, index_blk) catch @panic("no block");
         var freed = self.freeReferencedBlocks(index_dat[0..(self.blk_size / 2)]);
-
-        var i = self.indirect_offset_threshold;
-        while (i < self.blk_size) : (i += 2) {
-            const pointee = readBE(u16, index_dat[i .. i + 2]);
-            if (pointee == 0) {
-                continue;
-            }
-
-            self.blk_dev.readBlock(l2_dat, pointee) catch @panic("no block");
-            freed += self.freeReferencedBlocks(l2_dat);
-
-            self.freelist.free(pointee) catch @panic("no block");
-            freed += 1;
-        }
-
-        if (free_index_blk) {
-            self.freelist.free(index_blk) catch @panic("no block");
-            freed += 1;
-        }
+        freed += self.freeIndirectReferencedBlocks(index_dat[(self.blk_size / 2)..]);
+        self.freelist.free(index_blk);
+        freed += 1;
 
         return freed;
     }
@@ -640,11 +709,36 @@ pub const FileSystem = struct {
             if (pointee_blk == 0) {
                 continue;
             }
-            self.freelist.free(pointee_blk) catch @panic("no block");
+            self.freelist.free(pointee_blk);
             freed += 1;
         }
         return freed;
     }
+
+    fn freeIndirectReferencedBlocks(self: *@This(), pointers: []u8) u32 {
+        const l2_dat = self.blk_pool.take();
+        defer self.blk_pool.give(l2_dat);
+
+        var freed: u32 = 0;
+        var i: u32 = 0;
+        while (i < pointers.len) : (i += 2) {
+            const pointee = readBE(u16, pointers[i .. i + 2]);
+            if (pointee == 0) {
+                continue;
+            }
+
+            self.blk_dev.readBlock(l2_dat, pointee) catch return I.noBlock();
+            freed += self.freeReferencedBlocks(l2_dat);
+
+            self.freelist.free(pointee);
+            freed += 1;
+        }
+
+        return freed;
+    }
+
+    //
+    // Misc helpers
 
     // allocate a block and zero it
     fn alloc(self: *@This()) !u32 {
@@ -656,10 +750,19 @@ pub const FileSystem = struct {
     // allocate two blocks and zero them
     fn alloc2(self: *@This()) !struct { u32, u32 } {
         const b1 = try self.freelist.alloc();
-        errdefer self.freelist.free(b1) catch @panic("failed to free block during failed allocation");
+        errdefer self.freelist.free(b1);
         const b2 = try self.freelist.alloc();
         self.blk_dev.zeroBlock(b1);
         self.blk_dev.zeroBlock(b2);
         return .{ b1, b2 };
+    }
+
+    // patch a single integer value into a target block at the given offset
+    fn patchBlockBE(self: *@This(), comptime T: type, block: u32, offset: u32, value: T) void {
+        const data = self.blk_pool.take();
+        defer self.blk_pool.give(data);
+        self.blk_dev.readBlock(data, block) catch |err| I.noBlock2(err);
+        writeBE(T, data[offset..(offset + @sizeOf(T))], value);
+        self.blk_dev.writeBlock(block, data);
     }
 };

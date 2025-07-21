@@ -67,6 +67,18 @@ pub const DirEnt = struct {
     }
 };
 
+pub fn noBlock() noreturn {
+    @panic("NO BLOCK");
+}
+
+pub fn noBlock2(_: error{BlockNotReady}) noreturn {
+    @panic("NO BLOCK");
+}
+
+pub fn oom(_: error{OutOfMemory}) noreturn {
+    @panic("OOM");
+}
+
 test "isName" {
     var ent = DirEnt{};
     try ent.setName("hotdog");

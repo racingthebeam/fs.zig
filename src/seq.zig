@@ -1,9 +1,13 @@
-const Hnd = @import("common.zig").Hnd;
+const Fd = @import("public.zig").Fd;
 
 pub const Seq = struct {
-    val: Hnd = 1,
+    val: Fd,
 
-    pub fn take(self: *@This()) Hnd {
+    pub fn init() Seq {
+        return Seq{ .val = 1 };
+    }
+
+    pub fn take(self: *@This()) Fd {
         const out = self.val;
         self.val += 1;
         return out;

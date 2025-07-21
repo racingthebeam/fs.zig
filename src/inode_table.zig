@@ -91,16 +91,24 @@ pub const InodeTable = struct {
         self.free.deinit();
     }
 
-    pub fn create(self: *@This(), inode: *const Inode) ?u16 {
+    pub fn create(self: *@This(), is_dir: bool, data_blk_ptr: u16) ?u16 {
+        var inode = I.Inode{
+            .flags = if (is_dir) I.Dir else I.File,
+            .data_blk = data_blk_ptr,
+            .meta_blk = 0,
+            .size = 0,
+            .mtime = 0,
+        };
+
         std.debug.assert(inode.isPresent());
 
         const ptr = self.free.pop() orelse return null;
-        self.table[ptr] = inode.*;
+        self.table[ptr] = inode;
         self.writeBack(ptr);
         return ptr;
     }
 
-    pub fn update(self: *@This(), ptr: InodePtr, size: ?u32, mtime: ?u32) !void {
+    pub fn update(self: *@This(), ptr: InodePtr, size: ?u32, mtime: ?u32) void {
         var inode = Inode{};
         self.mustRead(&inode, ptr);
         if (size) |sz| {
@@ -110,21 +118,6 @@ pub const InodeTable = struct {
             inode.mtime = mt;
         }
         self.write(ptr, &inode);
-    }
-
-    pub fn take(self: *@This()) ?InodePtr {
-        const ino = self.free.pop() orelse return null;
-        self.table[ino].flags = 0xFFFF;
-        return ino;
-    }
-
-    pub fn give(self: *@This(), ptr: InodePtr) void {
-        std.debug.assert(ptr < self.size);
-
-        self.table[ptr] = Inode{};
-        self.writeBack(ptr);
-
-        self.free.append(ptr) catch @panic("OOM");
     }
 
     pub fn read(self: *@This(), dst: *Inode, ptr: InodePtr) bool {
@@ -138,6 +131,7 @@ pub const InodeTable = struct {
         return true;
     }
 
+    // read the given inode, asserting that it is currently active
     pub fn mustRead(self: *@This(), dst: *Inode, ptr: InodePtr) void {
         std.debug.assert(ptr < self.size);
         std.debug.assert(self.table[ptr].isPresent());
@@ -145,18 +139,27 @@ pub const InodeTable = struct {
         dst.* = self.table[ptr];
     }
 
-    pub fn write(self: *@This(), ptr: InodePtr, src: *const Inode) void {
+    // free the given inode, asserting that it is currently active.
+    // returns the data and meta pointers.
+    pub fn mustFree(self: *@This(), ptr: InodePtr) struct { u16, u16 } {
+        std.debug.assert(ptr < self.size);
+        std.debug.assert(self.table[ptr].isPresent());
+
+        const data = self.table[ptr].data_blk;
+        const meta = self.table[ptr].meta_blk;
+
+        self.table[ptr] = Inode{};
+        self.writeBack(ptr);
+        self.free.append(ptr) catch |err| I.oom(err);
+
+        return .{ data, meta };
+    }
+
+    fn write(self: *@This(), ptr: InodePtr, src: *const Inode) void {
         std.debug.assert(ptr < self.size);
         std.debug.assert(src.isPresent());
 
         self.table[ptr] = src.*;
-        self.writeBack(ptr);
-    }
-
-    pub fn clear(self: *@This(), ptr: InodePtr) void {
-        std.debug.assert(ptr < self.size);
-
-        self.table[ptr] = Inode{};
         self.writeBack(ptr);
     }
 

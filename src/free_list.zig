@@ -76,24 +76,24 @@ pub const FreeList = struct {
         return self.start_blk + calculateFreeListSize(self.blk_dev.blk_size, self.blk_dev.blk_count);
     }
 
-    pub fn alloc(self: *FreeList) !u32 {
+    pub fn alloc(self: *FreeList) error{NoFreeBlocks}!u32 {
         const opt_blk = self.list.pop();
         if (opt_blk) |blk| {
-            try self.markBlock(blk, false);
+            self.markBlock(blk, false);
             return blk;
         } else {
             return FreeListErrors.NoFreeBlocks;
         }
     }
 
-    pub fn free(self: *FreeList, block: u32) !void {
+    pub fn free(self: *FreeList, block: u32) void {
         self.list.append(block) catch @panic("OOM");
-        try self.markBlock(block, true);
+        self.markBlock(block, true);
     }
 
-    fn markBlock(self: *FreeList, block: u32, isFree: bool) !void {
+    fn markBlock(self: *FreeList, block: u32, isFree: bool) void {
         const pos = self.getBlockPos(block);
-        try self.blk_dev.readBlock(self.scratch, pos.block);
+        self.blk_dev.readBlock(self.scratch, pos.block) catch @panic("NO BLOCK");
         if (isFree) {
             self.scratch[pos.byte_offset] |= (@as(u8, 1) << pos.bit_offset);
         } else {
