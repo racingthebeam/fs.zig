@@ -306,7 +306,7 @@ pub const FileSystem = struct {
 
         const index_dat = self.blk_pool.take();
         defer self.blk_pool.give(index_dat);
-        self.blk_dev.readBlock(index_dat, inode.data_blk) catch |err| I.noBlock2(err);
+        self.blk_dev.readBlock(index_dat, inode.data_blk) catch |err| I.noBlock(err);
 
         const open_file = if (self.open_files.get(ptr)) |ex| block: {
             // can't truncate file if it's already open
@@ -598,7 +598,7 @@ pub const FileSystem = struct {
             .offset = offsets[0],
         };
 
-        self.blk_dev.readBlock(scratch, root.blk) catch |err| I.noBlock2(err);
+        self.blk_dev.readBlock(scratch, root.blk) catch |err| I.noBlock(err);
 
         fd.*.deep = false;
         fd.*.root = root;
@@ -619,14 +619,14 @@ pub const FileSystem = struct {
             .offset = offsets[0],
         };
 
-        self.blk_dev.readBlock(scratch, root.blk) catch |err| I.noBlock2(err);
+        self.blk_dev.readBlock(scratch, root.blk) catch |err| I.noBlock(err);
 
         const indirect = I.Ref{
             .blk = readBE(u16, scratch[root.offset .. root.offset + I.BlockPtrSize]),
             .offset = offsets[1],
         };
 
-        self.blk_dev.readBlock(scratch, indirect.blk) catch |err| I.noBlock2(err);
+        self.blk_dev.readBlock(scratch, indirect.blk) catch |err| I.noBlock(err);
 
         fd.*.deep = true;
         fd.*.root = root;
@@ -663,7 +663,7 @@ pub const FileSystem = struct {
         const index_dat = self.blk_pool.take();
         defer self.blk_pool.give(index_dat);
 
-        self.blk_dev.readBlock(index_dat, index_blk) catch return I.noBlock();
+        self.blk_dev.readBlock(index_dat, index_blk) catch |err| return I.noBlock(err);
         var freed = self.freeReferencedBlocks(index_dat[2..(self.blk_size / 2)]);
         freed += self.freeIndirectReferencedBlocks(index_dat[(self.blk_size / 2)..]);
 
@@ -727,7 +727,7 @@ pub const FileSystem = struct {
                 continue;
             }
 
-            self.blk_dev.readBlock(l2_dat, pointee) catch return I.noBlock();
+            self.blk_dev.readBlock(l2_dat, pointee) catch |err| return I.noBlock(err);
             freed += self.freeReferencedBlocks(l2_dat);
 
             self.freelist.free(pointee);
@@ -761,7 +761,7 @@ pub const FileSystem = struct {
     fn patchBlockBE(self: *@This(), comptime T: type, block: u32, offset: u32, value: T) void {
         const data = self.blk_pool.take();
         defer self.blk_pool.give(data);
-        self.blk_dev.readBlock(data, block) catch |err| I.noBlock2(err);
+        self.blk_dev.readBlock(data, block) catch |err| I.noBlock(err);
         writeBE(T, data[offset..(offset + @sizeOf(T))], value);
         self.blk_dev.writeBlock(block, data);
     }

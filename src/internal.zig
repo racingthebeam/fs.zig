@@ -9,24 +9,23 @@ pub const Error = error{
     LimitsExceeded,
 };
 
+//
+// Block pointer
+
+pub const BlockPtr = u16;
+pub const BlockPtrSize = @sizeOf(BlockPtr);
+
+//
+// Inodes
+
 pub const InodePtr = u16;
-pub const InodePtrSize = 2;
+pub const InodePtrSize = @sizeOf(InodePtr);
 pub const Inode = struct {
     flags: u16 = 0,
     data_blk: u16 = 0,
     meta_blk: u16 = 0,
     size: u32 = 0,
     mtime: u32 = 0,
-
-    pub fn init() Inode {
-        return Inode{
-            .flags = undefined,
-            .data_blk = undefined,
-            .meta_blk = undefined,
-            .size = undefined,
-            .mtime = undefined,
-        };
-    }
 
     pub fn isPresent(self: *const @This()) bool {
         return self.flags != 0;
@@ -41,25 +40,15 @@ pub const Inode = struct {
     }
 };
 
-pub const BlockPtrSize = 2;
-
 // Represents the shared global state for an open file.
 // A file can have multiple active FileFds, but only ever
 // one OpenFile.
 pub const OpenFile = struct {
-    // inode ptr
-    inode_ptr: u16,
-
-    root_blk: u16,
-
-    // current size of file
-    size: u32,
-
-    // was this file deleted while it was open?
-    deleted: bool = false,
-
-    // number of FileFd instances that reference this file
-    ref_count: u32 = 1,
+    inode_ptr: u16, // inode ptr
+    root_blk: u16, // root data block (cached from inode)
+    size: u32, // current size of file
+    deleted: bool = false, // was this file deleted while it was open?
+    ref_count: u32 = 1, // number of FileFd instances that reference this file
 };
 
 pub const FileFd = struct {
@@ -134,18 +123,6 @@ pub const DirEnt = struct {
     }
 };
 
-pub fn noBlock() noreturn {
-    @panic("NO BLOCK");
-}
-
-pub fn noBlock2(_: error{BlockNotReady}) noreturn {
-    @panic("NO BLOCK");
-}
-
-pub fn oom(_: error{OutOfMemory}) noreturn {
-    @panic("OOM");
-}
-
 test "isName" {
     var ent = DirEnt{};
     try ent.setName("hotdog");
@@ -153,4 +130,12 @@ test "isName" {
     try expect(ent.isName("hotdog"));
     try expect(!ent.isName("not-hotdog"));
     try expect(!ent.isName("this is a very long filename far longer than the longest we allow"));
+}
+
+pub fn noBlock(_: error{BlockNotReady}) noreturn {
+    @panic("NO BLOCK");
+}
+
+pub fn oom(_: error{OutOfMemory}) noreturn {
+    @panic("OOM");
 }
