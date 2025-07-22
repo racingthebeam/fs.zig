@@ -24,4 +24,26 @@ pub const Error = error{
     NotWritable,
     NoFreeInodes,
     InvalidFileHandle,
+
+    FatalInternalError,
+};
+
+const I = @import("internal.zig");
+
+pub const FILE_TYPE_FILE = 1;
+pub const FILE_TYPE_DIR = 2;
+
+pub const Stat = struct {
+    filename: [I.MaxFilenameLen:0]u8,
+    typ: u8,
+    executable: bool,
+    mtime: u32,
+    size: u32,
+
+    pub fn setFromInode(self: *Stat, inode: *I.Inode) void {
+        self.typ = if (inode.isDir()) FILE_TYPE_DIR else FILE_TYPE_FILE;
+        self.executable = false;
+        self.mtime = inode.mtime;
+        self.size = inode.size;
+    }
 };

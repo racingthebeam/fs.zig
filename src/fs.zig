@@ -27,8 +27,26 @@ pub const FileSystem = struct {
     inodes: InodeTable,
     freelist: FreeList,
     blk_pool: BlockPool,
-    open_files: OpenFiles,
-    file_handles: FileHandles,
+
+    // map of currently opened files, indexed by inode pointer.
+    //
+    // each *OpenFile value stores a cache of the "live state" of
+    // an open file, as well as tracking deletion, so that
+    // contents may be purged on close.
+    //
+    // any given file has at most one *OpenFile, regardless of
+    // how many active file handles exist.
+    open_file_state: OpenFiles,
+
+    // open file handles, indexed by public handle
+    open_files: FileHandles,
+
+    // open directory handles, indexed by public handle
+    // directories have separate lookup to ensure that arbitrary file
+    // operations cannot be performed on open directories.
+    open_dirs: FileHandles,
+
+    // shared sequence number generator for file + directory handles
     seq: Seq,
 
     // cached block size
@@ -111,8 +129,9 @@ pub const FileSystem = struct {
             .inodes = inodes,
             .freelist = freelist,
             .blk_pool = BlockPool.init(allocator, blk_dev.blk_size),
-            .open_files = OpenFiles.init(allocator),
-            .file_handles = FileHandles.init(allocator),
+            .open_file_state = OpenFiles.init(allocator),
+            .open_files = FileHandles.init(allocator),
+            .open_dirs = FileHandles.init(allocator),
             .seq = Seq.init(),
 
             .blk_size = blk_dev.blk_size,
@@ -127,8 +146,9 @@ pub const FileSystem = struct {
         self.inodes.deinit();
         self.freelist.deinit();
         self.blk_pool.deinit();
+        self.open_file_state.deinit();
         self.open_files.deinit();
-        self.file_handles.deinit();
+        self.open_dirs.deinit();
     }
 
     pub fn lookup(self: *@This(), dir: P.InodePtr, filename: []const u8) !?P.InodePtr {
@@ -152,7 +172,13 @@ pub const FileSystem = struct {
         return (try self.lookup(dir, filename)) != null;
     }
 
-    // TODO: stat
+    pub fn stat(self: *@This(), dst: *P.Stat, inode_ptr: P.InodePtr) !void {
+        const inode = I.Inode{};
+        if (!self.inodes.read(&inode, inode_ptr)) {
+            return P.Error.NoEnt;
+        }
+        dst.setFromInode(&inode);
+    }
 
     pub fn open(self: *@This(), dir: P.InodePtr, filename: []const u8, flags: u32) !P.Fd {
         try self.checkFilename(filename);
@@ -165,7 +191,7 @@ pub const FileSystem = struct {
 
         var dir_fd = I.FileFd{};
         try self.openInternal(@truncate(dir), &dir_fd, true, dir_open_flags);
-        defer self.closeInternal(&dir_fd) catch @panic("closeInternal() failed");
+        defer self.closeInternal(&dir_fd);
 
         const res = try self.findInode(&dir_fd, filename);
         if (res.inode) |inode| {
@@ -177,16 +203,63 @@ pub const FileSystem = struct {
         }
     }
 
-    // TODO: read
-    // TODO: write
-    // TODO: close
+    pub fn unlink(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
+        try self.checkFilename(filename);
+
+        var dir_fd = I.FileFd{};
+        try self.openInternal(@truncate(dir), &dir_fd, true, P.READ | P.WRITE);
+        defer self.closeInternal(&dir_fd);
+
+        const res = try self.findInode(&dir_fd, filename);
+        if (!res.inode) {
+            return P.Error.NoEnt;
+        }
+
+        const inode = I.Inode{};
+        if (!self.inodes.read(&inode, res.inode)) {
+            @panic("failed to read inode in unlink() - this is a bug");
+        } else if (inode.isDir()) {
+            return P.Error.IsDir;
+        }
+
+        // this is slightly bad behaviour
+        // if we've found the inode, the file pointer must be immediately after the entry.
+        // rewind it by one entry so we can zero it out.
+        self.seek(&dir_fd, dir_fd.abs_offset - I.DirEntSize) catch @panic("seek failed in unlink() - this is a bug");
+
+        // now zero it
+        const zeroes = [_]u8{0} ** 16;
+        _ = self.writeInternal(&dir_fd, &zeroes) catch @panic("failed to zero dir entry in unlink() - this is a bug");
+
+        if (self.open_file_state.get(res.inode)) |of| {
+            of.deleted = true;
+        } else {
+            self.purgeInode(res.inode);
+        }
+    }
+
+    pub fn read(self: *@This(), dst: []u8, fd: P.Fd) !void {
+        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        return self.readInternal(dst, file);
+    }
+
+    pub fn write(self: *@This(), fd: P.Fd, src: []u8) !void {
+        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        return self.writeInternal(file, src);
+    }
+
+    pub fn close(self: *@This(), fd: P.Fd) !void {
+        const pair = self.open_files.fetchRemove(fd) orelse return P.Error.InvalidFileHandle;
+        self.closeInternal(pair.value);
+        self.allocator.destroy(pair.value);
+    }
 
     fn openFileExisting(self: *@This(), inode_ptr: I.InodePtr, flags: u32) !P.Fd {
         const file = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(file);
         try self.openInternal(inode_ptr, file, false, flags);
         const fd = self.seq.take();
-        self.file_handles.put(fd, file) catch |err| I.oom(err);
+        self.open_files.put(fd, file) catch |err| I.oom(err);
         return fd;
     }
 
@@ -197,9 +270,44 @@ pub const FileSystem = struct {
         return self.openFileExisting(inode, flags);
     }
 
-    // TODO: opendir
-    // TODO: readdir
-    // TODO: closedir
+    pub fn opendir(self: *@This(), inode_ptr: P.InodePtr) !P.Fd {
+        const dir = self.allocator.create(I.FileFd) catch |err| I.oom(err);
+        errdefer self.allocator.destroy(dir);
+        try self.openInternal(inode_ptr, dir, true, P.READ);
+        const fd = self.seq.take();
+        self.open_dirs.put(fd, dir) catch |err| I.oom(err);
+        return fd;
+    }
+
+    pub fn closedir(self: *@This(), fd: P.Fd) !void {
+        const dir = self.open_dirs.get(fd) orelse return P.Error.InvalidFileHandle;
+        const of = dir.file;
+        self.allocator.destroy(dir);
+        std.debug.assert(self.open_dirs.remove(fd));
+        self.unref(of);
+    }
+
+    // read the next directory entry from the given directory handle into dst
+    // returns true on success, false on EOF
+    pub fn readdir(self: *@This(), dst: *P.Stat, fd: P.Fd) error{ InvalidFileHandle, FatalInternalError }!bool {
+        const file = self.open_dirs.get(fd) orelse return P.Error.InvalidFileHandle;
+
+        const ent = I.DirEnt{};
+        const ok = try self.readDirInternal(&ent, file, false);
+        if (!ok) {
+            return false;
+        }
+
+        const inode = I.Inode{};
+        if (!self.inodes.mustRead(&inode, ent.inode)) {
+            return P.Error.FatalInternalError;
+        }
+
+        @memcpy(&dst.filename, &ent.name);
+        dst.setFromInode(&inode);
+
+        return true;
+    }
 
     pub fn mkdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !P.InodePtr {
         try self.checkFilename(filename);
@@ -338,7 +446,7 @@ pub const FileSystem = struct {
         defer self.blk_pool.give(index_dat);
         self.blk_dev.readBlock(index_dat, inode.data_blk) catch |err| I.noBlock(err);
 
-        const open_file = if (self.open_files.get(ptr)) |ex| block: {
+        const open_file = if (self.open_file_state.get(ptr)) |ex| block: {
             // can't truncate file if it's already open
             // this limitation may be removed in the future but for now it's more complex to deal with than it's worth.
             if ((flags & P.TRUNCATE) > 0) {
@@ -356,7 +464,7 @@ pub const FileSystem = struct {
                 .deleted = false,
                 .ref_count = 1,
             };
-            self.open_files.put(ptr, of) catch |err| I.oom(err);
+            self.open_file_state.put(ptr, of) catch |err| I.oom(err);
             break :block of;
         };
 
@@ -391,21 +499,17 @@ pub const FileSystem = struct {
     }
 
     fn closeInternal(self: *@This(), fd: *I.FileFd) void {
-        const of = fd.*.file;
+        self.unref(fd.file);
+    }
 
-        of.*.ref_count -= 1;
-
-        if (of.*.ref_count == 0) {
-            const was_deleted = of.*.deleted;
-            const removed = self.open_files.remove(of.*.inode_ptr);
-            std.debug.assert(removed);
-
-            const inode_ptr = of.inode_ptr;
-            self.allocator.destroy(of);
-
-            if (was_deleted) {
-                self.purgeInode(inode_ptr);
+    fn unref(self: *@This(), of: *I.OpenFile) void {
+        of.ref_count -= 1;
+        if (of.ref_count == 0) {
+            if (of.deleted) {
+                self.purgeInode(of.inode_ptr);
             }
+            std.debug.assert(self.open_file_state.remove(of.inode_ptr));
+            self.allocator.destroy(of);
         }
     }
 
