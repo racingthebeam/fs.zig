@@ -132,6 +132,8 @@ pub const FileSystem = struct {
     }
 
     pub fn lookup(self: *@This(), dir: P.InodePtr, filename: []const u8) !?P.InodePtr {
+        try self.checkFilename(filename);
+
         var dir_fd = I.FileFd{};
         try self.openInternal(@truncate(dir), &dir_fd, true, P.READ);
         defer self.closeInternal(&dir_fd);
@@ -145,12 +147,17 @@ pub const FileSystem = struct {
     }
 
     pub fn exists(self: *@This(), dir: P.InodePtr, filename: []const u8) !bool {
+        try self.checkFilename(filename);
+
         return (try self.lookup(dir, filename)) != null;
     }
 
-    pub fn open(self: *@This(), dir: P.InodePtr, filename: []const u8, flags: u32) !P.Fd {
-        const create = (flags & P.CREATE) > 0;
+    // TODO: stat
 
+    pub fn open(self: *@This(), dir: P.InodePtr, filename: []const u8, flags: u32) !P.Fd {
+        try self.checkFilename(filename);
+
+        const create = (flags & P.CREATE) > 0;
         var dir_open_flags: u32 = P.READ;
         if (create) {
             dir_open_flags |= P.WRITE;
@@ -170,6 +177,10 @@ pub const FileSystem = struct {
         }
     }
 
+    // TODO: read
+    // TODO: write
+    // TODO: close
+
     fn openFileExisting(self: *@This(), inode_ptr: I.InodePtr, flags: u32) !P.Fd {
         const file = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(file);
@@ -179,43 +190,38 @@ pub const FileSystem = struct {
         return fd;
     }
 
-    fn openFileCreate(self: *@This(), fd: *I.FileFd, filename: []const u8, flags: u32, free_offset: ?u32) !P.Fd {
-        // flags to handle: none
-        _ = self;
-        _ = fd;
-        _ = filename;
-        _ = flags;
-        _ = free_offset;
-        return 0;
+    fn openFileCreate(self: *@This(), dir_fd: *I.FileFd, filename: []const u8, flags: u32, free_offset: ?u32) !P.Fd {
+        const inode = try self.createFile(false);
+        errdefer self.purgeInode(inode);
+        try self.insertDirEntry(dir_fd, filename, inode, free_offset);
+        return self.openFileExisting(inode, flags);
     }
 
+    // TODO: opendir
+    // TODO: readdir
+    // TODO: closedir
+
     pub fn mkdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !P.InodePtr {
-        if (filename.len > I.MaxFilenameLen) {
-            return P.Error.InvalidFileName;
-        }
+        try self.checkFilename(filename);
 
-        var fd = I.FileFd{};
-        try self.openInternal(@truncate(dir), &fd, true, P.READ | P.WRITE);
-        defer self.closeInternal(&fd);
+        var parent_dir_fd = I.FileFd{};
+        try self.openInternal(@truncate(dir), &parent_dir_fd, true, P.READ | P.WRITE);
+        defer self.closeInternal(&parent_dir_fd);
 
-        const res = try self.findInode(&fd, filename);
+        const res = try self.findInode(&parent_dir_fd, filename);
         if (res.inode) |_| {
             return P.Error.Exists;
-        } else if (res.free_offset) |fo| {
-            try self.seek(&fd, fo);
         }
 
-        const inode = try self.createFile(true);
+        const inode_ptr = try self.createFile(true);
+        try self.insertDirEntry(&parent_dir_fd, filename, inode_ptr, res.free_offset);
 
-        var buffer = [_]u8{0} ** I.DirEntSize;
-        @memcpy(buffer[0..filename.len], filename);
-        writeBE(u16, buffer[I.DirEntSize - 2 .. I.DirEntSize], inode);
-        _ = try self.writeInternal(&fd, &buffer);
-
-        return inode;
+        return inode_ptr;
     }
 
     pub fn rmdir(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
+        try self.checkFilename(filename);
+
         var fd = I.FileFd{};
         try self.openInternal(@truncate(dir), &fd, true, P.READ);
         defer self.closeInternal(&fd);
@@ -258,17 +264,41 @@ pub const FileSystem = struct {
     // If the entry is found, return inode will be set in return value.
     // If entry was not found, and there was an empty entry in the dir, this will be
     // reported in free_offset.
-    fn findInode(self: *@This(), fd: *I.FileFd, filename: []const u8) !struct { inode: ?I.InodePtr, free_offset: ?u32 } {
+    fn findInode(self: *@This(), dir_fd: *I.FileFd, filename: []const u8) !struct { inode: ?I.InodePtr, free_offset: ?u32 } {
         var free_offset: ?u32 = null;
         var ent = I.DirEnt{};
-        while (try self.readDirInternal(&ent, fd, true)) {
-            if (ent.name[0] == 0 and free_offset == null) {
-                free_offset = fd.abs_offset - I.DirEntSize;
+        while (try self.readDirInternal(&ent, dir_fd, true)) {
+            if (ent.isEmpty()) {
+                if (free_offset == null) {
+                    free_offset = dir_fd.abs_offset - I.DirEntSize;
+                }
             } else if (ent.isName(filename)) {
                 return .{ .inode = ent.inode, .free_offset = free_offset };
             }
         }
         return .{ .inode = null, .free_offset = free_offset };
+    }
+
+    // Insert the an entry into the directory whose contents are addressed by the provided file pointer.
+    //
+    // It is assumed that:
+    //   - filename is a valid length
+    //   - no conflicting filename exists in the directory
+    //   - directory file pointer was opened with write access
+    //
+    // If offset is not null, the entry will be inserted at this location.
+    // Otherwise, the entry is appended to the end of the file.
+    fn insertDirEntry(self: *@This(), dir: *I.FileFd, filename: []const u8, inode_ptr: I.InodePtr, offset: ?u32) !void {
+        if (offset) |o| {
+            try self.seek(dir, o);
+        } else {
+            self.seekEnd(dir);
+        }
+
+        var buffer = [_]u8{0} ** I.DirEntSize;
+        @memcpy(buffer[0..filename.len], filename);
+        writeBE(I.InodePtr, buffer[I.DirEntSize - 2 .. I.DirEntSize], inode_ptr);
+        _ = try self.writeInternal(dir, &buffer);
     }
 
     // Create an empty file with index/data blocks, returning the inode.
@@ -574,7 +604,9 @@ pub const FileSystem = struct {
     fn seek(self: *@This(), fd: *I.FileFd, abs_offset: u32) error{InvalidOffset}!void {
         const of = fd.file;
 
-        if (abs_offset > of.*.size) {
+        if (abs_offset == of.size) {
+            return;
+        } else if (abs_offset > of.*.size) {
             return P.Error.InvalidOffset;
         }
 
@@ -584,7 +616,11 @@ pub const FileSystem = struct {
             self.seekDeep(of, fd, abs_offset);
         }
 
-        fd.*.abs_offset = abs_offset;
+        fd.abs_offset = abs_offset;
+    }
+
+    fn seekEnd(self: *@This(), fd: *I.FileFd) void {
+        self.seek(fd, fd.file.size) catch @panic("seekEnd() failed - this is a bug");
     }
 
     fn seekShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
@@ -600,9 +636,9 @@ pub const FileSystem = struct {
 
         self.blk_dev.readBlock(scratch, root.blk) catch |err| I.noBlock(err);
 
-        fd.*.deep = false;
-        fd.*.root = root;
-        fd.*.data = I.Ref{
+        fd.deep = false;
+        fd.root = root;
+        fd.data = I.Ref{
             .blk = readBE(u16, scratch[root.offset .. root.offset + I.BlockPtrSize]),
             .offset = offsets[1],
         };
@@ -739,6 +775,12 @@ pub const FileSystem = struct {
 
     //
     // Misc helpers
+
+    fn checkFilename(_: *@This(), filename: []const u8) error{NameTooLong}!void {
+        if (filename.len > I.MaxFilenameLen) {
+            return P.Error.NameTooLong;
+        }
+    }
 
     // allocate a block and zero it
     fn alloc(self: *@This()) !u32 {

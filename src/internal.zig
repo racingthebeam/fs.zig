@@ -88,6 +88,10 @@ pub const DirEnt = struct {
     name: [MaxFilenameLen:0]u8 = .{0} ** MaxFilenameLen,
     inode: InodePtr = 0,
 
+    pub fn isEmpty(self: *DirEnt) bool {
+        return self.name[0] == 0;
+    }
+
     pub fn setName(self: *DirEnt, newName: []const u8) !void {
         if (newName.len > MaxFilenameLen) {
             return Error.InvalidFileName;

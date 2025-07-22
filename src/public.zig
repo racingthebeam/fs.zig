@@ -11,18 +11,17 @@ pub const READ = 8;
 pub const WRITE = 16;
 
 pub const Error = error{
-    InvalidFileName,
+    NameTooLong,
     InvalidOffset,
     IsDir,
     NotDir,
     NoEnt,
     Exists,
-    UsageError,
-    InvalidHandle,
     NoSpace,
     InvalidFSParams,
     Busy,
     NotReadable,
     NotWritable,
     NoFreeInodes,
+    InvalidFileHandle,
 };
