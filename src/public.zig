@@ -34,11 +34,11 @@ pub const FILE_TYPE_FILE = 1;
 pub const FILE_TYPE_DIR = 2;
 
 pub const Stat = struct {
-    filename: [I.MaxFilenameLen:0]u8,
-    typ: u8,
-    executable: bool,
-    mtime: u32,
-    size: u32,
+    filename: [I.MaxFilenameLen:0]u8 = undefined,
+    typ: u8 = undefined,
+    executable: bool = undefined,
+    mtime: u32 = undefined,
+    size: u32 = undefined,
 
     pub fn setFromInode(self: *Stat, inode: *I.Inode) void {
         self.typ = if (inode.isDir()) FILE_TYPE_DIR else FILE_TYPE_FILE;

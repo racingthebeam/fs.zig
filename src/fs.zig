@@ -173,8 +173,8 @@ pub const FileSystem = struct {
     }
 
     pub fn stat(self: *@This(), dst: *P.Stat, inode_ptr: P.InodePtr) !void {
-        const inode = I.Inode{};
-        if (!self.inodes.read(&inode, inode_ptr)) {
+        var inode = I.Inode{};
+        if (!self.inodes.read(&inode, @truncate(inode_ptr))) {
             return P.Error.NoEnt;
         }
         dst.setFromInode(&inode);
@@ -203,57 +203,6 @@ pub const FileSystem = struct {
         }
     }
 
-    pub fn unlink(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
-        try self.checkFilename(filename);
-
-        var dir_fd = I.FileFd{};
-        try self.openInternal(@truncate(dir), &dir_fd, true, P.READ | P.WRITE);
-        defer self.closeInternal(&dir_fd);
-
-        const res = try self.findInode(&dir_fd, filename);
-        if (!res.inode) {
-            return P.Error.NoEnt;
-        }
-
-        const inode = I.Inode{};
-        if (!self.inodes.read(&inode, res.inode)) {
-            @panic("failed to read inode in unlink() - this is a bug");
-        } else if (inode.isDir()) {
-            return P.Error.IsDir;
-        }
-
-        // this is slightly bad behaviour
-        // if we've found the inode, the file pointer must be immediately after the entry.
-        // rewind it by one entry so we can zero it out.
-        self.seek(&dir_fd, dir_fd.abs_offset - I.DirEntSize) catch @panic("seek failed in unlink() - this is a bug");
-
-        // now zero it
-        const zeroes = [_]u8{0} ** 16;
-        _ = self.writeInternal(&dir_fd, &zeroes) catch @panic("failed to zero dir entry in unlink() - this is a bug");
-
-        if (self.open_file_state.get(res.inode)) |of| {
-            of.deleted = true;
-        } else {
-            self.purgeInode(res.inode);
-        }
-    }
-
-    pub fn read(self: *@This(), dst: []u8, fd: P.Fd) !void {
-        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
-        return self.readInternal(dst, file);
-    }
-
-    pub fn write(self: *@This(), fd: P.Fd, src: []u8) !void {
-        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
-        return self.writeInternal(file, src);
-    }
-
-    pub fn close(self: *@This(), fd: P.Fd) !void {
-        const pair = self.open_files.fetchRemove(fd) orelse return P.Error.InvalidFileHandle;
-        self.closeInternal(pair.value);
-        self.allocator.destroy(pair.value);
-    }
-
     fn openFileExisting(self: *@This(), inode_ptr: I.InodePtr, flags: u32) !P.Fd {
         const file = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(file);
@@ -270,10 +219,78 @@ pub const FileSystem = struct {
         return self.openFileExisting(inode, flags);
     }
 
+    pub fn unlink(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
+        try self.checkFilename(filename);
+
+        var dir_fd = I.FileFd{};
+        try self.openInternal(@truncate(dir), &dir_fd, true, P.READ | P.WRITE);
+        defer self.closeInternal(&dir_fd);
+
+        const res = try self.findInode(&dir_fd, filename);
+        if (res.inode == null) {
+            return P.Error.NoEnt;
+        }
+
+        const inode_ptr = res.inode.?;
+
+        var inode = I.Inode{};
+        if (!self.inodes.read(&inode, inode_ptr)) {
+            @panic("failed to read inode in unlink() - this is a bug");
+        } else if (inode.isDir()) {
+            return P.Error.IsDir;
+        }
+
+        // this is slightly bad behaviour
+        // if we've found the inode, the file pointer must be immediately after the entry.
+        // rewind it by one entry so we can zero it out.
+        self.seekInternal(&dir_fd, dir_fd.abs_offset - I.DirEntSize) catch @panic("seek failed in unlink() - this is a bug");
+
+        // now zero it
+        const zeroes = [_]u8{0} ** I.DirEntSize;
+        _ = self.writeInternal(&dir_fd, zeroes[0..16]) catch @panic("failed to zero dir entry in unlink() - this is a bug");
+
+        if (self.open_file_state.get(inode_ptr)) |of| {
+            of.deleted = true;
+        } else {
+            self.purgeInode(inode_ptr);
+        }
+    }
+
+    pub fn read(self: *@This(), dst: []u8, fd: P.Fd) !struct { u32, bool } {
+        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        return self.readInternal(dst, file);
+    }
+
+    pub fn write(self: *@This(), fd: P.Fd, src: []u8) !u32 {
+        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        return self.writeInternal(file, src);
+    }
+
+    pub fn close(self: *@This(), fd: P.Fd) !void {
+        const pair = self.open_files.fetchRemove(fd) orelse return P.Error.InvalidFileHandle;
+        self.closeInternal(pair.value);
+        self.allocator.destroy(pair.value);
+    }
+
+    pub fn tell(self: *@This(), fd: P.Fd) !u32 {
+        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        return file.abs_offset;
+    }
+
+    pub fn eof(self: *@This(), fd: P.Fd) !bool {
+        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        return file.abs_offset == file.file.size;
+    }
+
+    pub fn seek(self: *@This(), fd: P.Fd, offset: u32) !void {
+        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        try self.seekInternal(file, offset);
+    }
+
     pub fn opendir(self: *@This(), inode_ptr: P.InodePtr) !P.Fd {
         const dir = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(dir);
-        try self.openInternal(inode_ptr, dir, true, P.READ);
+        try self.openInternal(@truncate(inode_ptr), dir, true, P.READ);
         const fd = self.seq.take();
         self.open_dirs.put(fd, dir) catch |err| I.oom(err);
         return fd;
@@ -289,17 +306,17 @@ pub const FileSystem = struct {
 
     // read the next directory entry from the given directory handle into dst
     // returns true on success, false on EOF
-    pub fn readdir(self: *@This(), dst: *P.Stat, fd: P.Fd) error{ InvalidFileHandle, FatalInternalError }!bool {
+    pub fn readdir(self: *@This(), dst: *P.Stat, fd: P.Fd) !bool {
         const file = self.open_dirs.get(fd) orelse return P.Error.InvalidFileHandle;
 
-        const ent = I.DirEnt{};
+        var ent = I.DirEnt{};
         const ok = try self.readDirInternal(&ent, file, false);
         if (!ok) {
             return false;
         }
 
-        const inode = I.Inode{};
-        if (!self.inodes.mustRead(&inode, ent.inode)) {
+        var inode = I.Inode{};
+        if (!self.inodes.read(&inode, ent.inode)) {
             return P.Error.FatalInternalError;
         }
 
@@ -358,7 +375,7 @@ pub const FileSystem = struct {
 
         // Clear directory entry
 
-        self.seek(&fd, fd.abs_offset - I.DirEntSize) catch {
+        self.seekInternal(&fd, fd.abs_offset - I.DirEntSize) catch {
             @panic("internal error - seek failed when clearing directory entry");
         };
         var zeroes = [_]u8{0} ** I.DirEntSize;
@@ -398,7 +415,7 @@ pub const FileSystem = struct {
     // Otherwise, the entry is appended to the end of the file.
     fn insertDirEntry(self: *@This(), dir: *I.FileFd, filename: []const u8, inode_ptr: I.InodePtr, offset: ?u32) !void {
         if (offset) |o| {
-            try self.seek(dir, o);
+            try self.seekInternal(dir, o);
         } else {
             self.seekEnd(dir);
         }
@@ -485,7 +502,7 @@ pub const FileSystem = struct {
         }
 
         if ((flags & P.SEEK_END) != 0) {
-            self.seek(fd, open_file.size) catch |err| {
+            self.seekInternal(fd, open_file.size) catch |err| {
                 // this construct is here so that compilation will fail if seeks() error set
                 // is ever expanded.
                 switch (err) {
@@ -544,9 +561,9 @@ pub const FileSystem = struct {
         // only return an EOF flag if we're both
         // a) at the file end, and
         // b) we attempted to read past the end
-        const eof = (fd.abs_offset == of.size) and (bytes_read < dst.len);
+        const is_eof = (fd.abs_offset == of.size) and (bytes_read < dst.len);
 
-        return .{ bytes_read, eof };
+        return .{ bytes_read, is_eof };
     }
 
     fn readDirInternal(self: *@This(), dst: *I.DirEnt, fd: *I.FileFd, include_empty: bool) !bool {
@@ -567,7 +584,7 @@ pub const FileSystem = struct {
         }
     }
 
-    fn writeInternal(self: *@This(), fd: *I.FileFd, buf: []u8) !u32 {
+    fn writeInternal(self: *@This(), fd: *I.FileFd, buf: []const u8) !u32 {
         if (!fd.isWritable()) {
             return P.Error.NotWritable;
         }
@@ -705,7 +722,7 @@ pub const FileSystem = struct {
     //
     // Seek
 
-    fn seek(self: *@This(), fd: *I.FileFd, abs_offset: u32) error{InvalidOffset}!void {
+    fn seekInternal(self: *@This(), fd: *I.FileFd, abs_offset: u32) error{InvalidOffset}!void {
         const of = fd.file;
 
         if (abs_offset == of.size) {
@@ -724,7 +741,7 @@ pub const FileSystem = struct {
     }
 
     fn seekEnd(self: *@This(), fd: *I.FileFd) void {
-        self.seek(fd, fd.file.size) catch @panic("seekEnd() failed - this is a bug");
+        self.seekInternal(fd, fd.file.size) catch @panic("seekEnd() failed - this is a bug");
     }
 
     fn seekShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
