@@ -155,6 +155,19 @@
           return this.#checkStatus(this.#api.fsRmdir(fsId, inode, ptr, len));
         }
 
+        opendir(fsId, inode) {
+          return this.#checkStatus(this.#api.fsOpendir(fsId, inode));
+        }
+
+        closedir(fsId, fd) {
+          return this.#checkStatus(this.#api.fsClosedir(fsId, fd));
+        }
+
+        readdir(fsId, fd) {
+          const len = this.#checkStatus(this.#api.fsReaddir(fsId, fd));
+          return (len > 0) ? this.#readStat(len) : false;
+        }
+
         //
         // Internals
 
@@ -188,11 +201,39 @@
           this.#strPtr += res.written;
           return out;
         }
+
+        #readStat(len) {
+          return new Stat(this.#shuttle.get(), len);
+        }
+      }
+
+      class Stat {
+        constructor(buffer, len) {
+          if (len !== 25) throw new Error(`invalid stat format - expected 25 bytes, got ${len}`);
+          
+          const nameEnd = buffer.indexOf(0);
+          const name = (nameEnd <= 0)
+            ? null
+            : new TextDecoder().decode(buffer.subarray(0, nameEnd));
+
+          const slice = buffer.subarray(15, 25);
+          const dv = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
+
+          this.name = name;
+          this.type = dv.getUint8(0);
+          this.executable = dv.getUint8(1) > 0;
+          this.mtime = dv.getUint32(2, false);
+          this.size = dv.getUint32(6, false);
+        }
+
+        get isFile() { return this.type === 1; }
+        get isDir() { return this.type === 2; }
       }
 
       WebAssembly.instantiateStreaming(fetch("../build/fs.wasm"), {
         env: {
-          notifyBlockChanged: blockChanged
+          notifyBlockChanged: blockChanged,
+          now: () => { return BigInt(Math.floor(Date.now() / 1000)); }
         }
       }).then((obj) => {
         const theFS = new FileSystems(obj.instance);
@@ -216,6 +257,20 @@
 
         console.log("lookup bar", theFS.lookup(fsId, 0, "test-2"));
         console.log("exists bar", theFS.exists(fsId, 0, "test-2"));
+
+        const fd = theFS.opendir(fsId, 0);
+        console.log("fd", fd);
+        while (true) {
+          const res = theFS.readdir(fsId, fd);
+          if (!res) {
+            console.log("end of dir");
+            break;
+          } else {
+            console.log("directory entry", res);
+          }
+        }
+
+        theFS.closedir(fsId, fd);
       });
     </script>
   </head>

@@ -10,6 +10,8 @@ const I = @import("internal.zig");
 const Inode = I.Inode;
 const InodePtr = I.InodePtr;
 
+const now = @import("wasm.zig").now;
+
 const readBE = @import("util.zig").readBE;
 const writeBE = @import("util.zig").writeBE;
 
@@ -97,7 +99,7 @@ pub const InodeTable = struct {
             .data_blk = data_blk_ptr,
             .meta_blk = 0,
             .size = 0,
-            .mtime = 0,
+            .mtime = now(),
         };
 
         std.debug.assert(inode.isPresent());
