@@ -194,6 +194,7 @@ pub const FileSystem = struct {
             return P.Error.NoEnt;
         }
         @memset(dst.filename[0..], 0);
+        dst.inode = inode_ptr;
         dst.setFromInode(&inode);
     }
 
@@ -338,6 +339,7 @@ pub const FileSystem = struct {
         }
 
         @memcpy(&dst.filename, &ent.name);
+        dst.inode = @enumFromInt(ent.inode);
         dst.setFromInode(&inode);
 
         return true;

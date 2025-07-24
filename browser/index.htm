@@ -223,21 +223,22 @@
 
       class Stat {
         constructor(buffer, len) {
-          if (len !== 25) throw new Error(`invalid stat format - expected 25 bytes, got ${len}`);
+          if (len !== 29) throw new Error(`invalid stat format - expected 25 bytes, got ${len}`);
           
           const nameEnd = buffer.indexOf(0);
           const name = (nameEnd <= 0)
             ? null
             : new TextDecoder().decode(buffer.subarray(0, nameEnd));
 
-          const slice = buffer.subarray(15, 25);
+          const slice = buffer.subarray(15, 29);
           const dv = new DataView(slice.buffer, slice.byteOffset, slice.byteLength);
 
           this.name = name;
-          this.type = dv.getUint8(0);
-          this.executable = dv.getUint8(1) > 0;
-          this.mtime = dv.getUint32(2, false);
-          this.size = dv.getUint32(6, false);
+          this.inode = dv.getUint32(0);
+          this.type = dv.getUint8(4);
+          this.executable = dv.getUint8(5) > 0;
+          this.mtime = dv.getUint32(6, false);
+          this.size = dv.getUint32(10, false);
         }
 
         get isFile() { return this.type === 1; }

@@ -51,6 +51,7 @@ pub const FILE_TYPE_DIR = 2;
 
 pub const Stat = struct {
     filename: [I.MaxFilenameLen:0]u8 = undefined,
+    inode: InodePtr = undefined,
     typ: u8 = undefined,
     executable: bool = undefined,
     mtime: u32 = undefined,

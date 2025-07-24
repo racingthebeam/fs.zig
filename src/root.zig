@@ -326,6 +326,7 @@ fn shuttleStat(s: *P.Stat) usize {
     var stream = std.io.fixedBufferStream(shuttle_buffer[0..]);
     const w = stream.writer();
     _ = w.writeAll(s.filename[0 .. I.MaxFilenameLen + 1]) catch unreachable; // include null terminator
+    _ = w.writeInt(i32, @intFromEnum(s.inode), std.builtin.Endian.big) catch unreachable;
     _ = w.writeByte(s.typ) catch unreachable;
     _ = w.writeByte(if (s.executable) 1 else 0) catch unreachable;
     _ = w.writeInt(u32, s.mtime, std.builtin.Endian.big) catch unreachable;
