@@ -349,7 +349,7 @@ pub const FileSystem = struct {
         try self.checkFilename(filename);
 
         var fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir), &fd, true, P.READ);
+        try self.openInternal(I.publicInodePtrToInternal(dir), &fd, true, P.READ | P.WRITE);
         defer self.closeInternal(&fd);
 
         // Find entry in dir

@@ -266,6 +266,7 @@
         
         console.log(theFS.mkdir(fsId, 0, "test-1"));
         console.log(theFS.mkdir(fsId, 0, "test-2"));
+        console.log(theFS.mkdir(fsId, 0, "test-3"));
 
         console.log("lookup foo", theFS.lookup(fsId, 0, "test-1"));
         console.log("exists foo", theFS.exists(fsId, 0, "test-1"));
@@ -284,8 +285,23 @@
             console.log("directory entry", res);
           }
         }
-
         theFS.closedir(fsId, fd);
+
+        console.log(theFS.rmdir(fsId, 0, "test-2"));
+
+        console.log("AFTER DELETE");
+        const fd2 = theFS.opendir(fsId, 0);
+        console.log("fd", fd2);
+        while (true) {
+          const res = theFS.readdir(fsId, fd2);
+          if (!res) {
+            console.log("end of dir");
+            break;
+          } else {
+            console.log("directory entry", res);
+          }
+        }
+        theFS.closedir(fsId, fd2);
 
         console.log("stat root", theFS.stat(fsId, 0));
       });
