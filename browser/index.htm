@@ -148,14 +148,46 @@
           return this.#readStat(len);
         }
 
-        // open
-        // unlink
-        // read
-        // write
-        // close
-        // tell
-        // eof
-        // seek
+        open(fsId, inode, name, flags) {
+          this.#resetStringBuffer();
+          const {ptr, len} = this.#writeString(name);
+          return this.#checkStatus(this.#api.fsOpen(fsId, inode, ptr, len, flags));
+        }
+
+        close(fsId, fd) {
+          return this.#checkStatus(this.#api.fsClose(fsId, fd));
+        }
+
+        unlink(fsId, inode, name) {
+          this.#resetStringBuffer();
+          const {ptr, len} = this.#writeString(name);
+          return this.#checkStatus(this.#api.fsUnlink(fsId, inode, ptr, len));
+        }
+
+        tell(fsId, fd) {
+          return this.#checkStatus(this.#api.fsTell(fsId, fd));
+        }
+
+        eof(fsId, fd) {
+          return this.#checkStatus(this.#api.fsEof(fsId, fd)) > 0;
+        }
+
+        seek(fsId, fd, offset) {
+          return this.#checkStatus(this.#api.fsSeek(fsId, fd, offset));
+        }
+
+        read(fsId, dst, fd) {
+          if (dst.length > this.#shuttle.length) throw new Error("max size exceeded");
+          const read = this.#checkStatus(this.#api.fsRead(fsId, fd, dst.length));
+          this.#shuttle.read(dst.subarray(0, read));
+          return read;
+        }
+
+        write(fsId, fd, src) {
+          if (src.length > this.#shuttle.length) throw new Error("max size exceeded");
+          this.#shuttle.write(src);
+          return this.#checkStatus(this.#api.fsWrite(fsId, fd, src.length));
+        }
 
         mkdir(fsId, inode, name) {
           this.#resetStringBuffer();
