@@ -151,11 +151,11 @@ pub const FileSystem = struct {
         self.open_dirs.deinit();
     }
 
-    pub fn lookup(self: *@This(), dir: P.InodePtr, filename: []const u8) !?P.InodePtr {
+    pub fn lookup(self: *@This(), dir_inode_ptr: P.InodePtr, filename: []const u8) !?P.InodePtr {
         try self.checkFilename(filename);
 
         var dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir), &dir_fd, true, P.READ);
+        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, P.READ);
         defer self.closeInternal(&dir_fd);
 
         const res = try self.findInode(&dir_fd, filename);
@@ -166,10 +166,10 @@ pub const FileSystem = struct {
         }
     }
 
-    pub fn exists(self: *@This(), dir: P.InodePtr, filename: []const u8) !bool {
+    pub fn exists(self: *@This(), dir_inode_ptr: P.InodePtr, filename: []const u8) !bool {
         try self.checkFilename(filename);
 
-        return (try self.lookup(dir, filename)) != null;
+        return (try self.lookup(dir_inode_ptr, filename)) != null;
     }
 
     pub fn stat(self: *@This(), dst: *P.Stat, inode_ptr: P.InodePtr) !void {
@@ -181,7 +181,7 @@ pub const FileSystem = struct {
         dst.setFromInode(&inode);
     }
 
-    pub fn open(self: *@This(), dir: P.InodePtr, filename: []const u8, flags: u32) !P.Fd {
+    pub fn open(self: *@This(), dir_inode_ptr: P.InodePtr, filename: []const u8, flags: u32) !P.Fd {
         try self.checkFilename(filename);
 
         const create = (flags & P.CREATE) > 0;
@@ -191,7 +191,7 @@ pub const FileSystem = struct {
         }
 
         var dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir), &dir_fd, true, dir_open_flags);
+        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, dir_open_flags);
         defer self.closeInternal(&dir_fd);
 
         const res = try self.findInode(&dir_fd, filename);
@@ -214,17 +214,17 @@ pub const FileSystem = struct {
     }
 
     fn openFileCreate(self: *@This(), dir_fd: *I.FileFd, filename: []const u8, flags: u32, free_offset: ?u32) !P.Fd {
-        const inode = try self.createFile(false);
-        errdefer self.purgeInode(inode);
-        try self.insertDirEntry(dir_fd, filename, inode, free_offset);
-        return self.openFileExisting(inode, flags);
+        const inode_ptr = try self.createFile(false);
+        errdefer self.purgeInode(inode_ptr);
+        try self.insertDirEntry(dir_fd, filename, inode_ptr, free_offset);
+        return self.openFileExisting(inode_ptr, flags);
     }
 
-    pub fn unlink(self: *@This(), dir: P.InodePtr, filename: []const u8) !void {
+    pub fn unlink(self: *@This(), dir_inode_ptr: P.InodePtr, filename: []const u8) !void {
         try self.checkFilename(filename);
 
         var dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir), &dir_fd, true, P.READ | P.WRITE);
+        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, P.READ | P.WRITE);
         defer self.closeInternal(&dir_fd);
 
         const res = try self.findInode(&dir_fd, filename);
@@ -258,12 +258,12 @@ pub const FileSystem = struct {
     }
 
     pub fn read(self: *@This(), dst: []u8, fd: P.Fd) !struct { u32, bool } {
-        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        const file = try self.get_open_file(fd);
         return self.readInternal(dst, file);
     }
 
     pub fn write(self: *@This(), fd: P.Fd, src: []u8) !u32 {
-        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        const file = try self.get_open_file(fd);
         return self.writeInternal(file, src);
     }
 
@@ -274,17 +274,17 @@ pub const FileSystem = struct {
     }
 
     pub fn tell(self: *@This(), fd: P.Fd) !u32 {
-        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        const file = try self.get_open_file(fd);
         return file.abs_offset;
     }
 
     pub fn eof(self: *@This(), fd: P.Fd) !bool {
-        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        const file = try self.get_open_file(fd);
         return file.abs_offset == file.file.size;
     }
 
     pub fn seek(self: *@This(), fd: P.Fd, offset: u32) !void {
-        const file = self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+        const file = try self.get_open_file(fd);
         try self.seekInternal(file, offset);
     }
 
@@ -298,7 +298,7 @@ pub const FileSystem = struct {
     }
 
     pub fn closedir(self: *@This(), fd: P.Fd) !void {
-        const dir = self.open_dirs.get(fd) orelse return P.Error.InvalidFileHandle;
+        const dir = try self.get_open_dir(fd);
         const of = dir.file;
         self.allocator.destroy(dir);
         std.debug.assert(self.open_dirs.remove(fd));
@@ -308,7 +308,7 @@ pub const FileSystem = struct {
     // read the next directory entry from the given directory handle into dst
     // returns true on success, false on EOF
     pub fn readdir(self: *@This(), dst: *P.Stat, fd: P.Fd) !bool {
-        const file = self.open_dirs.get(fd) orelse return P.Error.InvalidFileHandle;
+        const file = try self.get_open_dir(fd);
 
         var ent = I.DirEnt{};
         const ok = try self.readDirInternal(&ent, file, false);
@@ -939,5 +939,13 @@ pub const FileSystem = struct {
             }
             return fd;
         }
+    }
+
+    fn get_open_file(self: *@This(), fd: P.Fd) error{InvalidFileHandle}!*I.FileFd {
+        return self.open_files.get(fd) orelse return P.Error.InvalidFileHandle;
+    }
+
+    fn get_open_dir(self: *@This(), fd: P.Fd) error{InvalidFileHandle}!*I.FileFd {
+        return self.open_dirs.get(fd) orelse return P.Error.InvalidFileHandle;
     }
 };
