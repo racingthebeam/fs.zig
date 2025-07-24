@@ -4,6 +4,8 @@
   <head>
     <title>FS-WASM Test</title>
     <script type="module">
+      import { dump } from "./dump.js";
+
       function blockChanged(deviceId, block) {
         console.log("block changed %d:%d", deviceId, block);
       }
@@ -337,6 +339,8 @@
         theFS.closedir(fsId, fd2);
 
         console.log("stat root", theFS.stat(fsId, 0));
+
+        console.log(dump(theFS, fsId));
       });
     </script>
   </head>
