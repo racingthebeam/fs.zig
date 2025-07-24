@@ -1,4 +1,4 @@
-pub const Fd = u64;
+pub const Fd = enum(i32) { _ };
 pub const InodePtr = u32;
 
 // unique ID that identifies this filesystem type

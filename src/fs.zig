@@ -208,7 +208,7 @@ pub const FileSystem = struct {
         const file = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(file);
         try self.openInternal(inode_ptr, file, false, flags);
-        const fd = self.seq.take();
+        const fd = self.allocateFd();
         self.open_files.put(fd, file) catch |err| I.oom(err);
         return fd;
     }
@@ -292,7 +292,7 @@ pub const FileSystem = struct {
         const dir = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(dir);
         try self.openInternal(@truncate(inode_ptr), dir, true, P.READ);
-        const fd = self.seq.take();
+        const fd = self.allocateFd();
         self.open_dirs.put(fd, dir) catch |err| I.oom(err);
         return fd;
     }
@@ -928,5 +928,16 @@ pub const FileSystem = struct {
         self.blk_dev.readBlock(data, block) catch |err| I.noBlock(err);
         writeBE(T, data[offset..(offset + @sizeOf(T))], value);
         self.blk_dev.writeBlock(block, data);
+    }
+
+    // alllocate a new file descriptor
+    fn allocateFd(self: *@This()) P.Fd {
+        while (true) {
+            const fd: P.Fd = @enumFromInt(self.seq.take());
+            if (self.open_dirs.contains(fd) or self.open_files.contains(fd)) {
+                continue;
+            }
+            return fd;
+        }
     }
 };

@@ -216,12 +216,12 @@ pub export fn fsExists(fs_id: i32, inode: u32, name: [*]u8, name_len: usize) i32
 pub export fn fsOpen(fs_id: i32, inode: u32, name: [*]u8, name_len: usize, flags: u32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
     const fd = f.open(inode, name[0..name_len], flags) catch |err| return mapError(err);
-    return @intCast(fd);
+    return fdToJS(fd);
 }
 
 pub export fn fsClose(fs_id: i32, fd: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    f.close(@intCast(fd)) catch |err| return mapError(err);
+    f.close(fdFromJS(fd)) catch |err| return mapError(err);
     return 0;
 }
 
@@ -231,33 +231,33 @@ pub export fn fsUnlink(fs_id: i32, dir_inode_ptr: u32, name: [*]u8, name_len: us
     return 0;
 }
 
-pub export fn fsTell(fs_id: i32, fd: i64) i32 {
+pub export fn fsTell(fs_id: i32, fd: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const pos = f.tell(@intCast(fd)) catch |err| return mapError(err);
+    const pos = f.tell(fdFromJS(fd)) catch |err| return mapError(err);
     return @intCast(pos);
 }
 
-pub export fn fsEof(fs_id: i32, fd: i64) i32 {
+pub export fn fsEof(fs_id: i32, fd: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const eof = f.eof(@intCast(fd)) catch |err| return mapError(err);
+    const eof = f.eof(fdFromJS(fd)) catch |err| return mapError(err);
     return if (eof) 1 else 0;
 }
 
-pub export fn fsSeek(fs_id: i32, fd: i64, offset: u32) i32 {
+pub export fn fsSeek(fs_id: i32, fd: i32, offset: u32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    f.seek(@intCast(fd), offset) catch |err| return mapError(err);
+    f.seek(fdFromJS(fd), offset) catch |err| return mapError(err);
     return 0;
 }
 
-pub export fn fsRead(fs_id: i32, fd: i64, len: u32) i32 {
+pub export fn fsRead(fs_id: i32, fd: i32, len: u32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const read = f.read(shuttle_buffer[0..len], @intCast(fd)) catch |err| return mapError(err);
+    const read = f.read(shuttle_buffer[0..len], fdFromJS(fd)) catch |err| return mapError(err);
     return @intCast(read[0]);
 }
 
-pub export fn fsWrite(fs_id: i32, fd: i64, len: u32) i32 {
+pub export fn fsWrite(fs_id: i32, fd: i32, len: u32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const written = f.write(@intCast(fd), shuttle_buffer[0..len]) catch |err| return mapError(err);
+    const written = f.write(fdFromJS(fd), shuttle_buffer[0..len]) catch |err| return mapError(err);
     return @intCast(written);
 }
 
@@ -276,15 +276,15 @@ pub export fn fsRmdir(fs_id: i32, inode: u32, name: [*]u8, name_len: usize) i32 
     return 0;
 }
 
-pub export fn fsOpendir(fs_id: i32, inode: u32) i64 {
+pub export fn fsOpendir(fs_id: i32, inode: u32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
     const fd = f.opendir(inode) catch |err| return mapError(err);
-    return @intCast(fd);
+    return fdToJS(fd);
 }
 
-pub export fn fsClosedir(fs_id: i32, fd: i64) i32 {
+pub export fn fsClosedir(fs_id: i32, fd: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    f.closedir(@intCast(fd)) catch |err| return mapError(err);
+    f.closedir(fdFromJS(fd)) catch |err| return mapError(err);
     return 0;
 }
 
@@ -292,10 +292,10 @@ pub export fn fsClosedir(fs_id: i32, fd: i64) i32 {
 // on success, the file stat is copied into the shuttle buffer and its length returned
 // on EOF, returns 0 (no more entries left in dir)
 // on other error, returns < 0
-pub export fn fsReaddir(fs_id: i32, fd: i64) i32 {
+pub export fn fsReaddir(fs_id: i32, fd: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
     var stat = P.Stat{};
-    const ok = f.readdir(&stat, @intCast(fd)) catch |err| return mapError(err);
+    const ok = f.readdir(&stat, fdFromJS(fd)) catch |err| return mapError(err);
     if (ok) {
         return @intCast(shuttleStat(&stat));
     } else {
@@ -336,4 +336,12 @@ fn mapError(err: anyerror) i32 {
         error.FatalInternalError => -1,
         else => E_INTERNAL,
     };
+}
+
+fn fdToJS(fd: P.Fd) i32 {
+    return @intFromEnum(fd);
+}
+
+fn fdFromJS(js: i32) P.Fd {
+    return @enumFromInt(js);
 }
