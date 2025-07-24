@@ -1,5 +1,5 @@
 pub const Fd = enum(i32) { _ };
-pub const InodePtr = u32;
+pub const InodePtr = enum(i32) { _ };
 
 // unique ID that identifies this filesystem type
 pub const FS_TYPE_ID = 1;

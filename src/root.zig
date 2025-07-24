@@ -184,26 +184,25 @@ pub export fn fileSystemDestroy(fs_id: i32) i32 {
 //
 // Filesystem ops
 
-pub export fn fsLookup(fs_id: i32, inode: u32, name: [*]u8, name_len: usize) i32 {
+pub export fn fsLookup(fs_id: i32, inode: i32, name: [*]u8, name_len: usize) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    if (f.lookup(inode, name[0..name_len]) catch |err| return mapError(err)) |found_inode| {
-        // this is safe because the maximum number of supported inode number is 65535
-        return @intCast(found_inode);
+    if (f.lookup(inodeFromJS(inode), name[0..name_len]) catch |err| return mapError(err)) |found_inode| {
+        return inodeToJS(found_inode);
     } else {
         return E_NOENT;
     }
 }
 
-pub export fn fsStat(fs_id: i32, inode: u32) i32 {
+pub export fn fsStat(fs_id: i32, inode: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
     var stat = P.Stat{};
-    f.stat(&stat, inode) catch |err| return mapError(err);
+    f.stat(&stat, inodeFromJS(inode)) catch |err| return mapError(err);
     return @intCast(shuttleStat(&stat));
 }
 
-pub export fn fsExists(fs_id: i32, inode: u32, name: [*]u8, name_len: usize) i32 {
+pub export fn fsExists(fs_id: i32, inode: i32, name: [*]u8, name_len: usize) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    if (f.exists(inode, name[0..name_len]) catch |err| return mapError(err)) {
+    if (f.exists(inodeFromJS(inode), name[0..name_len]) catch |err| return mapError(err)) {
         return 1;
     } else {
         return 0;
@@ -213,9 +212,9 @@ pub export fn fsExists(fs_id: i32, inode: u32, name: [*]u8, name_len: usize) i32
 //
 // File
 
-pub export fn fsOpen(fs_id: i32, inode: u32, name: [*]u8, name_len: usize, flags: u32) i32 {
+pub export fn fsOpen(fs_id: i32, inode: i32, name: [*]u8, name_len: usize, flags: u32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const fd = f.open(inode, name[0..name_len], flags) catch |err| return mapError(err);
+    const fd = f.open(inodeFromJS(inode), name[0..name_len], flags) catch |err| return mapError(err);
     return fdToJS(fd);
 }
 
@@ -225,9 +224,9 @@ pub export fn fsClose(fs_id: i32, fd: i32) i32 {
     return 0;
 }
 
-pub export fn fsUnlink(fs_id: i32, dir_inode_ptr: u32, name: [*]u8, name_len: usize) i32 {
+pub export fn fsUnlink(fs_id: i32, dir_inode_ptr: i32, name: [*]u8, name_len: usize) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    f.unlink(dir_inode_ptr, name[0..name_len]) catch |err| return mapError(err);
+    f.unlink(inodeFromJS(dir_inode_ptr), name[0..name_len]) catch |err| return mapError(err);
     return 0;
 }
 
@@ -264,21 +263,21 @@ pub export fn fsWrite(fs_id: i32, fd: i32, len: u32) i32 {
 //
 // Directory
 
-pub export fn fsMkdir(fs_id: i32, inode: u32, name: [*]u8, name_len: usize) i32 {
+pub export fn fsMkdir(fs_id: i32, inode: i32, name: [*]u8, name_len: usize) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const new_inode = f.mkdir(inode, name[0..name_len]) catch |err| return mapError(err);
-    return @intCast(new_inode);
+    const new_inode = f.mkdir(inodeFromJS(inode), name[0..name_len]) catch |err| return mapError(err);
+    return inodeToJS(new_inode);
 }
 
-pub export fn fsRmdir(fs_id: i32, inode: u32, name: [*]u8, name_len: usize) i32 {
+pub export fn fsRmdir(fs_id: i32, inode: i32, name: [*]u8, name_len: usize) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    f.rmdir(inode, name[0..name_len]) catch |err| return mapError(err);
+    f.rmdir(inodeFromJS(inode), name[0..name_len]) catch |err| return mapError(err);
     return 0;
 }
 
-pub export fn fsOpendir(fs_id: i32, inode: u32) i32 {
+pub export fn fsOpendir(fs_id: i32, inode: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const fd = f.opendir(inode) catch |err| return mapError(err);
+    const fd = f.opendir(inodeFromJS(inode)) catch |err| return mapError(err);
     return fdToJS(fd);
 }
 
@@ -336,6 +335,14 @@ fn mapError(err: anyerror) i32 {
         error.FatalInternalError => -1,
         else => E_INTERNAL,
     };
+}
+
+fn inodeToJS(inode: P.InodePtr) i32 {
+    return @intFromEnum(inode);
+}
+
+fn inodeFromJS(js: i32) P.InodePtr {
+    return @enumFromInt(js);
 }
 
 fn fdToJS(fd: P.Fd) i32 {

@@ -143,3 +143,12 @@ pub fn noBlock(_: error{BlockNotReady}) noreturn {
 pub fn oom(_: error{OutOfMemory}) noreturn {
     @panic("OOM");
 }
+
+pub fn publicInodePtrToInternal(p: P.InodePtr) InodePtr {
+    const as_int = @intFromEnum(p);
+    return @intCast(as_int);
+}
+
+pub fn internalInodePtrToPublic(p: InodePtr) P.InodePtr {
+    return @enumFromInt(p);
+}
