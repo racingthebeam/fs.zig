@@ -18,6 +18,10 @@ pub const BlockPtrSize = @sizeOf(BlockPtr);
 //
 // Inodes
 
+pub const Dir = 0x0001;
+pub const File = 0x0002;
+pub const Executable = 0x8000;
+
 pub const InodePtr = u16;
 pub const InodePtrSize = @sizeOf(InodePtr);
 pub const Inode = struct {
@@ -77,12 +81,13 @@ pub const Ref = struct {
 };
 
 pub const MaxFilenameLen = 14;
+pub const DirEntSize = MaxFilenameLen + InodePtrSize;
 
-pub const Dir = 0x0001;
-pub const File = 0x0002;
-pub const Executable = 0x8000;
-
-pub const DirEntSize = 16;
+comptime {
+    if (DirEntSize != 16) {
+        @compileError("DirEntSize must be 16");
+    }
+}
 
 pub const DirEnt = struct {
     name: [MaxFilenameLen:0]u8 = .{0} ** MaxFilenameLen,
