@@ -143,6 +143,20 @@
           return this.#checkStatus(res) > 0;
         }
 
+        stat(fsId, inode) {
+          const len = this.#checkStatus(this.#api.fsStat(fsId, inode));
+          return this.#readStat(len);
+        }
+
+        // open
+        // unlink
+        // read
+        // write
+        // close
+        // tell
+        // eof
+        // seek
+
         mkdir(fsId, inode, name) {
           this.#resetStringBuffer();
           const {ptr, len} = this.#writeString(name);
@@ -228,6 +242,7 @@
 
         get isFile() { return this.type === 1; }
         get isDir() { return this.type === 2; }
+        get isExecutable() { return this.executable; }
       }
 
       WebAssembly.instantiateStreaming(fetch("../build/fs.wasm"), {
@@ -271,6 +286,8 @@
         }
 
         theFS.closedir(fsId, fd);
+
+        console.log("stat root", theFS.stat(fsId, 0));
       });
     </script>
   </head>

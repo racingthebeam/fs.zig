@@ -177,6 +177,7 @@ pub const FileSystem = struct {
         if (!self.inodes.read(&inode, @truncate(inode_ptr))) {
             return P.Error.NoEnt;
         }
+        @memset(dst.filename[0..], 0);
         dst.setFromInode(&inode);
     }
 

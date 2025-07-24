@@ -288,6 +288,10 @@ pub export fn fsClosedir(fs_id: i32, fd: i64) i32 {
     return 0;
 }
 
+// read next directory entry from an open directory
+// on success, the file stat is copied into the shuttle buffer and its length returned
+// on EOF, returns 0 (no more entries left in dir)
+// on other error, returns < 0
 pub export fn fsReaddir(fs_id: i32, fd: i64) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
     var stat = P.Stat{};
