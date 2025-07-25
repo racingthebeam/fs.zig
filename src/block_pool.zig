@@ -18,33 +18,27 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const BlockPool = struct {
-    allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
     blk_size: u32,
     avail: std.ArrayList([]u8),
-    all: std.ArrayList([]u8),
 
     pub fn init(allocator: Allocator, blk_size: u32) BlockPool {
         return BlockPool{
-            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(allocator),
             .blk_size = blk_size,
             .avail = std.ArrayList([]u8).init(allocator),
-            .all = std.ArrayList([]u8).init(allocator),
         };
     }
 
     pub fn deinit(self: *@This()) void {
-        for (self.all.items) |blk| {
-            self.allocator.free(blk);
-        }
-        self.all.deinit();
+        self.arena.deinit();
         self.avail.deinit();
     }
 
     pub fn take(self: *BlockPool) []u8 {
         if (self.avail.items.len == 0) {
-            const blk = self.allocator.alloc(u8, self.blk_size) catch @panic("OOM");
+            const blk = self.arena.allocator().alloc(u8, self.blk_size) catch @panic("OOM");
             self.avail.append(blk) catch @panic("OOM");
-            self.all.append(blk) catch @panic("OOM");
         }
 
         return self.avail.pop() orelse unreachable;
