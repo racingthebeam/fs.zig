@@ -80,14 +80,6 @@ pub const FileFd = struct {
     data: Ref = undefined, // position in the data block
     abs_offset: u32 = undefined,
     deep: bool = undefined,
-
-    pub fn isReadable(self: *FileFd) bool {
-        return self.flags & P.READ > 0;
-    }
-
-    pub fn isWritable(self: *FileFd) bool {
-        return self.flags & P.WRITE > 0;
-    }
 };
 
 // Ref is a pointer to a specific byte on disk, expressed in terms of block:offset.

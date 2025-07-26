@@ -20,11 +20,8 @@ pub const InodePtr = enum(i32) { _ };
 // unique ID that identifies this filesystem type
 pub const FS_TYPE_ID = 1;
 
-pub const CREATE = 1;
-pub const SEEK_END = 2;
-pub const TRUNCATE = 4;
-pub const READ = 8;
-pub const WRITE = 16;
+pub const SEEK_END = 1;
+pub const TRUNCATE = 2;
 
 pub const Whence = enum(u8) { Abs = 0, RelCurr = 1, RelEnd = 2 };
 

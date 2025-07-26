@@ -171,7 +171,7 @@ pub const FileSystem = struct {
         try self.checkFilename(filename);
 
         var dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, P.READ);
+        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, 0);
         defer self.closeInternal(&dir_fd);
 
         const res = try self.findInode(&dir_fd, filename);
@@ -214,7 +214,7 @@ pub const FileSystem = struct {
         try self.checkFilename(filename);
 
         var dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, P.READ | P.WRITE);
+        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, 0);
         defer self.closeInternal(&dir_fd);
 
         const res = try self.findInode(&dir_fd, filename);
@@ -233,7 +233,7 @@ pub const FileSystem = struct {
         try self.checkFilename(filename);
 
         var dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, P.READ | P.WRITE);
+        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, 0);
         defer self.closeInternal(&dir_fd);
 
         const res = try self.findInode(&dir_fd, filename);
@@ -319,7 +319,7 @@ pub const FileSystem = struct {
     pub fn opendir(self: *@This(), inode_ptr: P.InodePtr) !P.Fd {
         const dir = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(dir);
-        try self.openInternal(I.publicInodePtrToInternal(inode_ptr), dir, true, P.READ);
+        try self.openInternal(I.publicInodePtrToInternal(inode_ptr), dir, true, 0);
         const fd = self.allocateFd();
         self.open_dirs.put(fd, dir) catch |err| I.oom(err);
         return fd;
@@ -360,7 +360,7 @@ pub const FileSystem = struct {
         try self.checkFilename(filename);
 
         var parent_dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir), &parent_dir_fd, true, P.READ | P.WRITE);
+        try self.openInternal(I.publicInodePtrToInternal(dir), &parent_dir_fd, true, 0);
         defer self.closeInternal(&parent_dir_fd);
 
         const res = try self.findInode(&parent_dir_fd, filename);
@@ -378,7 +378,7 @@ pub const FileSystem = struct {
         try self.checkFilename(filename);
 
         var fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir), &fd, true, P.READ | P.WRITE);
+        try self.openInternal(I.publicInodePtrToInternal(dir), &fd, true, 0);
         defer self.closeInternal(&fd);
 
         // Find entry in dir
@@ -563,10 +563,6 @@ pub const FileSystem = struct {
     fn readInternal(self: *@This(), dst: []u8, fd: *I.FileFd) !struct { u32, bool } {
         const of = fd.file;
 
-        if (!fd.isReadable()) {
-            return P.Error.NotReadable;
-        }
-
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
@@ -615,10 +611,6 @@ pub const FileSystem = struct {
     }
 
     fn writeInternal(self: *@This(), fd: *I.FileFd, buf: []const u8) !u32 {
-        if (!fd.isWritable()) {
-            return P.Error.NotWritable;
-        }
-
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
