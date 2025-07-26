@@ -289,7 +289,7 @@ pub const FileSystem = struct {
 
     pub fn statfd(self: *@This(), dst: *P.Stat, fd: P.Fd) !void {
         const file = try self.get_open_file(fd);
-        const inode_ptr = file.file.inode_ptr;
+        const inode_ptr = file.of.inode_ptr;
 
         var inode = I.Inode{};
         if (!self.inodes.read(&inode, inode_ptr)) {
@@ -303,7 +303,7 @@ pub const FileSystem = struct {
 
     pub fn eof(self: *@This(), fd: P.Fd) !bool {
         const file = try self.get_open_file(fd);
-        return file.abs_offset == file.file.size;
+        return file.abs_offset == file.of.size;
     }
 
     pub fn seek(self: *@This(), fd: P.Fd, offset: i32, whence: P.Whence) !void {
@@ -316,7 +316,7 @@ pub const FileSystem = struct {
                 break :blk currOffset + offset;
             },
             P.Whence.RelEnd => blk: {
-                const fileSize: i64 = @intCast(file.file.size);
+                const fileSize: i64 = @intCast(file.of.size);
                 break :blk fileSize + offset;
             },
         };
@@ -341,7 +341,7 @@ pub const FileSystem = struct {
 
     pub fn closedir(self: *@This(), fd: P.Fd) !void {
         const dir = try self.get_open_dir(fd);
-        const of = dir.file;
+        const of = dir.of;
         self.allocator.destroy(dir);
         std.debug.assert(self.open_dirs.remove(fd));
         self.unref(of);
@@ -530,7 +530,7 @@ pub const FileSystem = struct {
         };
 
         fd.* = I.FileFd{
-            .file = open_file,
+            .of = open_file,
             .flags = flags,
             .root = Ref{ .blk = inode.data_blk, .offset = 0 },
             .mid = Ref{ .blk = 0, .offset = 0 },
@@ -560,7 +560,7 @@ pub const FileSystem = struct {
     }
 
     fn closeInternal(self: *@This(), fd: *I.FileFd) void {
-        self.unref(fd.file);
+        self.unref(fd.of);
     }
 
     fn unref(self: *@This(), of: *I.OpenFile) void {
@@ -575,7 +575,7 @@ pub const FileSystem = struct {
     }
 
     fn readInternal(self: *@This(), dst: []u8, fd: *I.FileFd) !struct { u32, bool } {
-        const of = fd.file;
+        const of = fd.of;
 
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
@@ -647,9 +647,9 @@ pub const FileSystem = struct {
             }
         }
 
-        if (fd.abs_offset > fd.file.size) {
-            fd.file.size = fd.abs_offset;
-            self.inodes.update(fd.file.inode_ptr, fd.file.size, null);
+        if (fd.abs_offset > fd.of.size) {
+            fd.of.size = fd.abs_offset;
+            self.inodes.update(fd.of.inode_ptr, fd.of.size, null);
         }
 
         return bytes_written;
@@ -759,7 +759,7 @@ pub const FileSystem = struct {
     // Seek
 
     fn seekInternal(self: *@This(), fd: *I.FileFd, abs_offset: u32) error{InvalidOffset}!void {
-        const of = fd.file;
+        const of = fd.of;
 
         if (abs_offset == of.size) {
             return;
@@ -777,7 +777,7 @@ pub const FileSystem = struct {
     }
 
     fn seekEnd(self: *@This(), fd: *I.FileFd) void {
-        self.seekInternal(fd, fd.file.size) catch @panic("seekEnd() failed - this is a bug");
+        self.seekInternal(fd, fd.of.size) catch @panic("seekEnd() failed - this is a bug");
     }
 
     fn seekShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {

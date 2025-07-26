@@ -72,7 +72,7 @@ pub const OpenFile = struct {
 };
 
 pub const FileFd = struct {
-    file: *OpenFile = undefined,
+    of: *OpenFile = undefined,
     flags: u32 = undefined,
 
     root: Ref = undefined, // position in the root block
