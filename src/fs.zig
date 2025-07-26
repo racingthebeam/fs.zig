@@ -201,9 +201,12 @@ pub const FileSystem = struct {
     pub fn open(self: *@This(), inode_ptr: P.InodePtr, flags: u32) !P.Fd {
         const file = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(file);
+
         try self.openInternal(I.publicInodePtrToInternal(inode_ptr), file, false, flags);
+
         const fd = self.allocateFd();
         self.open_files.put(fd, file) catch |err| I.oom(err);
+
         return fd;
     }
 
