@@ -26,6 +26,8 @@ pub const TRUNCATE = 4;
 pub const READ = 8;
 pub const WRITE = 16;
 
+pub const Whence = enum(u8) { Abs = 0, RelCurr = 1, RelEnd = 2 };
+
 pub const Error = error{
     NameTooLong,
     InvalidOffset,

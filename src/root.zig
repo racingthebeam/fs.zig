@@ -264,9 +264,12 @@ pub export fn fsEof(fs_id: i32, fd: i32) i32 {
     return if (eof) 1 else 0;
 }
 
-pub export fn fsSeek(fs_id: i32, fd: i32, offset: u32) i32 {
+pub export fn fsSeek(fs_id: i32, fd: i32, offset: i32, whence: u8) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    f.seek(fdFromJS(fd), offset) catch |err| return mapError(err);
+    if (whence > 2) {
+        return E_PARAM;
+    }
+    f.seek(fdFromJS(fd), offset, @enumFromInt(whence)) catch |err| return mapError(err);
     return 0;
 }
 

@@ -292,9 +292,28 @@ pub const FileSystem = struct {
         return file.abs_offset == file.file.size;
     }
 
-    pub fn seek(self: *@This(), fd: P.Fd, offset: u32) !void {
+    pub fn seek(self: *@This(), fd: P.Fd, offset: i32, whence: P.Whence) !void {
         const file = try self.get_open_file(fd);
-        try self.seekInternal(file, offset);
+
+        const targetOffset: i64 = switch (whence) {
+            P.Whence.Abs => offset,
+            P.Whence.RelCurr => blk: {
+                const currOffset: i64 = @intCast(file.abs_offset);
+                break :blk currOffset + offset;
+            },
+            P.Whence.RelEnd => blk: {
+                const fileSize: i64 = @intCast(file.file.size);
+                break :blk fileSize + offset;
+            },
+        };
+
+        // we just check the integer range here; seekInternal() handles
+        // the quantitative validation of the offset.
+        if (targetOffset < 0 or targetOffset > std.math.maxInt(u32)) {
+            return P.Error.InvalidOffset;
+        }
+
+        try self.seekInternal(file, @intCast(targetOffset));
     }
 
     pub fn opendir(self: *@This(), inode_ptr: P.InodePtr) !P.Fd {
