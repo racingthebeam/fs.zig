@@ -258,6 +258,13 @@ pub export fn fsTell(fs_id: i32, fd: i32) i32 {
     return @intCast(pos);
 }
 
+pub export fn fsStatFd(fs_id: i32, fd: i32) i32 {
+    const f = file_systems.get(fs_id) orelse return E_NOFS;
+    var stat = P.Stat{};
+    f.statfd(&stat, fdFromJS(fd)) catch |err| return mapError(err);
+    return @intCast(shuttleStat(&stat));
+}
+
 pub export fn fsEof(fs_id: i32, fd: i32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
     const eof = f.eof(fdFromJS(fd)) catch |err| return mapError(err);

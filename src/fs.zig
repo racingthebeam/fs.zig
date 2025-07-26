@@ -287,6 +287,20 @@ pub const FileSystem = struct {
         return file.abs_offset;
     }
 
+    pub fn statfd(self: *@This(), dst: *P.Stat, fd: P.Fd) !void {
+        const file = try self.get_open_file(fd);
+        const inode_ptr = file.file.inode_ptr;
+
+        var inode = I.Inode{};
+        if (!self.inodes.read(&inode, inode_ptr)) {
+            return P.Error.NoEnt;
+        }
+
+        @memset(dst.filename[0..], 0);
+        dst.inode = I.internalInodePtrToPublic(inode_ptr);
+        dst.setFromInode(&inode);
+    }
+
     pub fn eof(self: *@This(), fd: P.Fd) !bool {
         const file = try self.get_open_file(fd);
         return file.abs_offset == file.file.size;
