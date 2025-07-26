@@ -228,10 +228,16 @@ pub export fn fsExists(fs_id: i32, inode: i32, name: [*]u8, name_len: usize) i32
 //
 // File
 
-pub export fn fsOpen(fs_id: i32, inode: i32, name: [*]u8, name_len: usize, flags: u32) i32 {
+pub export fn fsOpen(fs_id: i32, inode: i32, flags: u32) i32 {
     const f = file_systems.get(fs_id) orelse return E_NOFS;
-    const fd = f.open(inodeFromJS(inode), name[0..name_len], flags) catch |err| return mapError(err);
+    const fd = f.open(inodeFromJS(inode), flags) catch |err| return mapError(err);
     return fdToJS(fd);
+}
+
+pub export fn fsCreate(fs_id: i32, dir_inode_ptr: i32, name: [*]u8, name_len: usize) i32 {
+    const f = file_systems.get(fs_id) orelse return E_NOFS;
+    const inode = f.create(inodeFromJS(dir_inode_ptr), name[0..name_len]) catch |err| return mapError(err);
+    return inodeToJS(inode);
 }
 
 pub export fn fsClose(fs_id: i32, fd: i32) i32 {

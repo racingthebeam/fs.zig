@@ -198,43 +198,32 @@ pub const FileSystem = struct {
         dst.setFromInode(&inode);
     }
 
-    pub fn open(self: *@This(), dir_inode_ptr: P.InodePtr, filename: []const u8, flags: u32) !P.Fd {
-        try self.checkFilename(filename);
-
-        const create = (flags & P.CREATE) > 0;
-        var dir_open_flags: u32 = P.READ;
-        if (create) {
-            dir_open_flags |= P.WRITE;
-        }
-
-        var dir_fd = I.FileFd{};
-        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, dir_open_flags);
-        defer self.closeInternal(&dir_fd);
-
-        const res = try self.findInode(&dir_fd, filename);
-        if (res.inode) |inode| {
-            return self.openFileExisting(inode, flags);
-        } else if (!create) {
-            return P.Error.NoEnt;
-        } else {
-            return self.openFileCreate(&dir_fd, filename, flags, res.free_offset);
-        }
-    }
-
-    fn openFileExisting(self: *@This(), inode_ptr: I.InodePtr, flags: u32) !P.Fd {
+    pub fn open(self: *@This(), inode_ptr: P.InodePtr, flags: u32) !P.Fd {
         const file = self.allocator.create(I.FileFd) catch |err| I.oom(err);
         errdefer self.allocator.destroy(file);
-        try self.openInternal(inode_ptr, file, false, flags);
+        try self.openInternal(I.publicInodePtrToInternal(inode_ptr), file, false, flags);
         const fd = self.allocateFd();
         self.open_files.put(fd, file) catch |err| I.oom(err);
         return fd;
     }
 
-    fn openFileCreate(self: *@This(), dir_fd: *I.FileFd, filename: []const u8, flags: u32, free_offset: ?u32) !P.Fd {
+    pub fn create(self: *@This(), dir_inode_ptr: P.InodePtr, filename: []const u8) !P.InodePtr {
+        try self.checkFilename(filename);
+
+        var dir_fd = I.FileFd{};
+        try self.openInternal(I.publicInodePtrToInternal(dir_inode_ptr), &dir_fd, true, P.READ | P.WRITE);
+        defer self.closeInternal(&dir_fd);
+
+        const res = try self.findInode(&dir_fd, filename);
+        if (res.inode) |_| {
+            return P.Error.Exists;
+        }
+
         const inode_ptr = try self.createFile(false);
         errdefer self.purgeInode(inode_ptr);
-        try self.insertDirEntry(dir_fd, filename, inode_ptr, free_offset);
-        return self.openFileExisting(inode_ptr, flags);
+        try self.insertDirEntry(&dir_fd, filename, inode_ptr, res.free_offset);
+
+        return I.internalInodePtrToPublic(inode_ptr);
     }
 
     pub fn unlink(self: *@This(), dir_inode_ptr: P.InodePtr, filename: []const u8) !void {
