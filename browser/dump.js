@@ -1,25 +1,46 @@
+import { OpenFlags, MaxTransferSize } from "../js/constants.js";
+
 export { dump };
 
-function dump(fs, id) {
+function dump(fs) {
+    function dumpFile(inode) {
+        const stat = fs.stat(inode);
+        const fh = fs.open(inode, OpenFlags.READ);
+        const out = new Uint8Array(stat.size);
+        
+        let offset = 0;
+        while (offset < stat.size) {
+            const bytesToRead = Math.min(MaxTransferSize, stat.size - offset);
+            const bytesRead = fs.read(out.subarray(offset, offset + bytesToRead), fh);
+            if (bytesToRead !== bytesRead) {
+                throw new Error(`Expected to read ${bytesToRead} bytes, but got ${bytesRead}`);
+            }
+            offset += bytesRead;
+        }
+        
+        fs.close(fh);
+        return out;
+    }
+
     function dumpDir(inode)  {
         const out = new Map();
         
-        const dh = fs.opendir(id, inode);
+        const dh = fs.opendir(inode);
         while (true) {
-            const entry = fs.readdir(id, dh);
+            const entry = fs.readdir(dh);
             if (!entry) {
                 break;
             }
             if (entry.isDir) {
                 out.set(entry.name, {
                     type: 'dir',
-                    contents: dumpDir(entry.inode),
+                    entries: dumpDir(entry.inode),
                 });
             } else {
                 out.set(entry.name, {
                     type: 'file',
-                    executable: entry.isExecutable,
-                    size: entry.size,
+                    contents: dumpFile(entry.inode),
+                    executable: entry.isExecutable
                 });
             }
         }

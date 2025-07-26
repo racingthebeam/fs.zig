@@ -1,0 +1,9 @@
+export const NOENT = 'ENOENT';
+export const NOTDIR = 'ENOTDIR';
+export const ISDIR = 'EISDIR';
+export const BADFD = 'EBADFD';
+export const BADOFFSET = 'EBADOFFSET';
+export const EXIST = 'EEXIST';
+export const BUSY = 'EBUSY';
+export const ACCESS = 'EACCESS';
+export const ARG = 'EARG';
