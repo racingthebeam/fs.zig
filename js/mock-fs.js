@@ -143,7 +143,7 @@ export class MockFs {
         return openFile.offset >= openFile.inode.size;
     }
     
-    seek(fd, offset, whence = Abs) {
+    seek(fd, offset, whence) {
         const openFile = this.#getOpenFile(fd);
 
         if (whence === RelCurr) {

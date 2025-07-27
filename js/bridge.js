@@ -136,8 +136,8 @@ export class Bridge {
     return this.#checkStatus(this.#api.fsEof(fsId, fd)) > 0;
   }
 
-  seek(fsId, fd, offset) {
-    return this.#checkStatus(this.#api.fsSeek(fsId, fd, offset));
+  seek(fsId, fd, offset, whence) {
+    return this.#checkStatus(this.#api.fsSeek(fsId, fd, offset, whence));
   }
 
   read(fsId, dst, fd) {

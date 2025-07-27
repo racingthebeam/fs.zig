@@ -49,7 +49,7 @@ export class FileSystem {
         return this.#bridge.eof(this.#id, fd);
     }
 
-    seek(fd, offset, whence = Abs) {
+    seek(fd, offset, whence) {
         return this.#bridge.seek(this.#id, fd, offset, whence);
     }
 
