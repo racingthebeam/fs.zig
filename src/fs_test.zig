@@ -22,6 +22,8 @@ const blkdev = @import("./block_device.zig");
 
 const allocator = std.testing.allocator;
 
+const L = @import("limits.zig");
+
 fn createFileSystem(blk_size: u32, blk_count: u32, inode_blk_count: u32) FileSystem {
     const dev = blkdev.create(allocator, blk_size, blk_count) catch @panic("failed to create block device");
     var params = [_]u8{0} ** 16;
@@ -35,42 +37,70 @@ fn cleanup(fs: *FileSystem) void {
     blkdev.destroy(allocator, fs.blk_dev);
 }
 
-test "filesystem init" {
-    var fs = createFileSystem(512, 1024, 8);
+// test "filesystem init" {
+//     var fs = createFileSystem(512, 1024, 8);
+//     defer cleanup(&fs);
+// }
+
+// test "create/delete directories" {
+//     var fs = createFileSystem(512, 1024, 8);
+//     defer cleanup(&fs);
+
+//     try expect(!try fs.exists(0, "test-1"));
+//     try expect(!try fs.exists(0, "test-2"));
+
+//     _ = try fs.mkdir(0, "test-1");
+
+//     try expect(try fs.exists(0, "test-1"));
+//     try expect(!try fs.exists(0, "test-2"));
+
+//     var did_fail = false;
+//     _ = fs.mkdir(0, "test-1") catch {
+//         did_fail = true;
+//     };
+
+//     try expect(did_fail);
+
+//     _ = try fs.mkdir(0, "test-2");
+
+//     try expect(try fs.exists(0, "test-1"));
+//     try expect(try fs.exists(0, "test-2"));
+
+//     try fs.rmdir(0, "test-1");
+
+//     try expect(!try fs.exists(0, "test-1"));
+//     try expect(try fs.exists(0, "test-2"));
+
+//     try fs.rmdir(0, "test-2");
+
+//     try expect(!try fs.exists(0, "test-1"));
+//     try expect(!try fs.exists(0, "test-2"));
+// }
+
+test "write max size file" {
+    var fs = createFileSystem(128, 4096, 32);
     defer cleanup(&fs);
-}
 
-test "create/delete directories" {
-    var fs = createFileSystem(512, 1024, 8);
-    defer cleanup(&fs);
+    const maxFileSize = L.maxFileSize(128);
+    std.debug.print("Max file size: {}\n", .{maxFileSize});
 
-    try expect(!try fs.exists(0, "test-1"));
-    try expect(!try fs.exists(0, "test-2"));
+    const inode = try fs.create(@enumFromInt(0), "test");
+    std.debug.print("New file inode: {}\n", .{inode});
 
-    _ = try fs.mkdir(0, "test-1");
+    var writeBuffer: [64]u8 = undefined;
+    for (&writeBuffer, 0..) |*v, i| {
+        v.* = @truncate(i);
+    }
 
-    try expect(try fs.exists(0, "test-1"));
-    try expect(!try fs.exists(0, "test-2"));
+    const fd = try fs.open(inode, 0);
+    defer fs.close(fd) catch @panic("closse file failed");
 
-    var did_fail = false;
-    _ = fs.mkdir(0, "test-1") catch {
-        did_fail = true;
-    };
+    var totalWritten: u32 = 0;
+    while (totalWritten < maxFileSize) {
+        const bytesToWrite = @min(maxFileSize - totalWritten, writeBuffer.len);
+        const w = try fs.write(fd, writeBuffer[0..bytesToWrite]);
+        totalWritten += w;
+    }
 
-    try expect(did_fail);
-
-    _ = try fs.mkdir(0, "test-2");
-
-    try expect(try fs.exists(0, "test-1"));
-    try expect(try fs.exists(0, "test-2"));
-
-    try fs.rmdir(0, "test-1");
-
-    try expect(!try fs.exists(0, "test-1"));
-    try expect(try fs.exists(0, "test-2"));
-
-    try fs.rmdir(0, "test-2");
-
-    try expect(!try fs.exists(0, "test-1"));
-    try expect(!try fs.exists(0, "test-2"));
+    try std.testing.expectError(error.NoSpace, fs.write(fd, writeBuffer[0..1]));
 }

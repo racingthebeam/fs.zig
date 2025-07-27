@@ -673,7 +673,7 @@ pub const FileSystem = struct {
                 target_blk = try self.simpleIncrement(&fd.root);
             } else {
                 target_blk = try self.indirectIncrement(fd);
-                fd.*.deep = true;
+                fd.deep = true;
             }
         } else {
             if ((fd.mid.offset + 2) < self.blk_size) {
@@ -683,7 +683,7 @@ pub const FileSystem = struct {
             }
         }
 
-        fd.*.data = I.Ref{ .blk = target_blk, .offset = 0 };
+        fd.data = I.Ref{ .blk = target_blk, .offset = 0 };
     }
 
     // Advances the given Ref by 2 bytes (the size of a block pointer).
@@ -706,7 +706,7 @@ pub const FileSystem = struct {
             target_blk = @truncate(new_blk);
         }
 
-        ent.*.offset = next_offset;
+        ent.offset = next_offset;
 
         return target_blk;
     }
@@ -731,7 +731,13 @@ pub const FileSystem = struct {
 
             const blks = try self.alloc2();
 
+            // tmp_data is already valid - contains the root block
             writeBE(u16, tmp_data[next_root_offset .. next_root_offset + 2], @truncate(blks[0]));
+
+            // read the freshly zero'd mid-block
+            // alternatively we could just zero it ourselves here but this is
+            // more consistent.
+            try self.blk_dev.readBlock(mid_blk_data, blks[1]);
             writeBE(u16, mid_blk_data[0..2], @truncate(blks[1]));
 
             self.blk_dev.writeBlock(blks[0], mid_blk_data);
@@ -758,22 +764,22 @@ pub const FileSystem = struct {
     //
     // Seek
 
-    fn seekInternal(self: *@This(), fd: *I.FileFd, abs_offset: u32) error{InvalidOffset}!void {
+    fn seekInternal(self: *@This(), fd: *I.FileFd, new_abs_offset: u32) error{InvalidOffset}!void {
         const of = fd.of;
 
-        if (abs_offset == of.size) {
+        if (new_abs_offset == fd.abs_offset) {
             return;
-        } else if (abs_offset > of.*.size) {
+        } else if (new_abs_offset > of.size) {
             return P.Error.InvalidOffset;
         }
 
-        if (abs_offset < self.indirect_offset_threshold) {
-            self.seekShallow(of, fd, abs_offset);
+        if (new_abs_offset < self.indirect_offset_threshold) {
+            self.seekShallow(of, fd, new_abs_offset);
         } else {
-            self.seekDeep(of, fd, abs_offset);
+            self.seekDeep(of, fd, new_abs_offset);
         }
 
-        fd.abs_offset = abs_offset;
+        fd.abs_offset = new_abs_offset;
     }
 
     fn seekEnd(self: *@This(), fd: *I.FileFd) void {
