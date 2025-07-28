@@ -88,6 +88,10 @@ pub const FreeList = struct {
         self.list.deinit();
     }
 
+    pub fn freeBlockCount(self: *FreeList) usize {
+        return self.list.items.len;
+    }
+
     pub fn endBlock(self: *FreeList) u32 {
         return self.start_blk + calculateFreeListSize(self.blk_dev.blk_size, self.blk_dev.blk_count);
     }

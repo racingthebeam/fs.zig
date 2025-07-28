@@ -22,6 +22,7 @@ const blkdev = @import("./block_device.zig");
 
 const allocator = std.testing.allocator;
 
+const P = @import("public.zig");
 const L = @import("limits.zig");
 
 fn createFileSystem(blk_size: u32, blk_count: u32, inode_blk_count: u32) FileSystem {
@@ -77,14 +78,11 @@ fn cleanup(fs: *FileSystem) void {
 //     try expect(!try fs.exists(0, "test-2"));
 // }
 
-test "write max size file" {
-    var fs = createFileSystem(128, 4096, 32);
-    defer cleanup(&fs);
-
-    const maxFileSize = L.maxFileSize(128);
+fn writeMaxSizeFile(fs: *FileSystem, name: []const u8) P.Fd {
+    const maxFileSize = L.maxFileSize(fs.blk_size);
     std.debug.print("Max file size: {}\n", .{maxFileSize});
 
-    const inode = try fs.create(@enumFromInt(0), "test");
+    const inode = fs.create(@enumFromInt(0), name) catch @panic("create file failed");
     std.debug.print("New file inode: {}\n", .{inode});
 
     var writeBuffer: [64]u8 = undefined;
@@ -92,15 +90,43 @@ test "write max size file" {
         v.* = @truncate(i);
     }
 
-    const fd = try fs.open(inode, 0);
-    defer fs.close(fd) catch @panic("closse file failed");
+    const fd = fs.open(inode, 0) catch @panic("failed to open file");
 
     var totalWritten: u32 = 0;
     while (totalWritten < maxFileSize) {
         const bytesToWrite = @min(maxFileSize - totalWritten, writeBuffer.len);
-        const w = try fs.write(fd, writeBuffer[0..bytesToWrite]);
+        const w = fs.write(fd, writeBuffer[0..bytesToWrite]) catch @panic("write failed");
         totalWritten += w;
     }
 
-    try std.testing.expectError(error.NoSpace, fs.write(fd, writeBuffer[0..1]));
+    return fd;
+}
+
+test "write max size file" {
+    var fs = createFileSystem(128, 4096, 32);
+    defer cleanup(&fs);
+
+    const fd = writeMaxSizeFile(&fs, "test");
+
+    var byte: [1]u8 = .{0xFF};
+    try std.testing.expectError(error.NoSpace, fs.write(fd, byte[0..1]));
+
+    try fs.close(fd);
+}
+
+test "deleting file releases blocks" {
+    var fs = createFileSystem(128, 4096, 32);
+    defer cleanup(&fs);
+
+    // check block usage
+    const free_blocks_before = fs.freelist.freeBlockCount();
+    const fd = writeMaxSizeFile(&fs, "test");
+    try fs.close(fd);
+    const free_blocks_after = fs.freelist.freeBlockCount();
+    const blocks_used = free_blocks_before - free_blocks_after;
+    try std.testing.expect(blocks_used == L.blocksForMaxFileSize(fs.blk_size));
+
+    // delete the file and ensure all the blocks are returned
+    try fs.unlink(@enumFromInt(0), "test");
+    try std.testing.expect(fs.freelist.freeBlockCount() == free_blocks_before);
 }
