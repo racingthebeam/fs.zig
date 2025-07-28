@@ -192,7 +192,7 @@ export class Bridge {
   #checkStatus(status) {
     if (status < 0) {
       // TODO: proper error type
-      throw new Error(`status: ${status}`);
+      throw new Error(`fs op failed with status: ${status}`);
     }
     return status;
   }

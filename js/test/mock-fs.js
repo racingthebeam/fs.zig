@@ -236,13 +236,77 @@ function runTests() {
     });
 
     QUnit.test('read/write fuzz', function(assert) {
-        const fileContents = new Uint8Array(MaxFileSize);
-        
-        for (let pass = 0; pass < 1000; pass++) {
-            const writers = [];
+	// 255 seems to be maximum number of assertions QUint allows
+        for (let pass = 0; pass < 255; pass++) {
+	    const fileContents = new Uint8Array(MaxFileSize);
+	    let fileSize = 0;
+	    
+	    const filename = `file${pass}`;
+	    const inode = this.fs.create(0, filename);
+           
+	    // create a pool of 10 writers (real and simulated)
+	    const writers = [];
             for (let i = 0; i < 10; i++) {
-                writers.push({offset: 0});
+                writers.push({offset: 0, fd: this.fs.open(inode)});
             }
+	    
+	    const ops = 100 + Math.floor(Math.random() * 4900);
+	    for (let i = 0; i < ops; i++) {
+		// pick a writer
+		const w = writers[Math.floor(Math.random() * writers.length)];	
+
+		// seek to a new point in the file sometimes
+		const p = Math.random();
+		if (p < 0.01) {
+		    w.offset = fileSize;
+		    this.fs.seek(w.fd, fileSize, 0);
+		} else if (p < 0.1) {
+		    const newOffset = Math.floor(Math.random() * fileSize);
+		    w.offset = newOffset;
+		    this.fs.seek(w.fd, newOffset, 0);
+		}
+
+		const bytesToWrite = Math.min(
+		    Math.floor(Math.random() * 512),
+		    fileContents.length - w.offset
+		);
+
+		const val = Math.floor(Math.random() * 256);
+		const chunk = new Uint8Array(bytesToWrite);
+		chunk.fill(val);
+		
+		// write to the mock file
+		fileContents.subarray(w.offset, w.offset + bytesToWrite).set(chunk);
+		w.offset += bytesToWrite;
+
+		// write to the real file
+		this.fs.write(w.fd, chunk);
+
+		if (w.offset > fileSize) {
+		    fileSize = w.offset;
+		}
+	    }
+
+	    // close the writers
+	    for (const w of writers) {
+		this.fs.close(w.fd);
+	    }
+
+	    // read back the fill file from the filesystem
+	    const fd = this.fs.open(inode);
+	    const actual = new Uint8Array(fileSize);
+	    let read = 0;
+	    while (read < fileSize) {
+		const toRead = Math.min(1024, fileSize - read);
+		this.fs.read(actual.subarray(read, read + toRead), fd);
+		read += toRead;
+	    }
+	    this.fs.close(fd);
+
+	    // delete the filename
+	    this.fs.unlink(0, filename);
+
+	    assert.deepEqual(actual, fileContents.subarray(0, fileSize), `pass ${pass} (ops=${ops}, size=${fileSize})`);
         }
     });
 
