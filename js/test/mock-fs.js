@@ -39,6 +39,8 @@ function portableStat(stat) {
 }
 
 fs.load("../../build/fs.wasm").then((bridge) => {
+    console.log("WASM module loaded");
+
     testFS("zigfs", {
         mock: false,
         create: function() {
@@ -65,6 +67,8 @@ fs.load("../../build/fs.wasm").then((bridge) => {
             delete this.fs;
         }
     });
+
+    QUnit.start();
 });
 
 function testFS(moduleName, {create, destroy, mock}) {
@@ -229,6 +233,17 @@ function runTests() {
                 executable: false
             }
         });
+    });
+
+    QUnit.test('read/write fuzz', function(assert) {
+        const fileContents = new Uint8Array(MaxFileSize);
+        
+        for (let pass = 0; pass < 1000; pass++) {
+            const writers = [];
+            for (let i = 0; i < 10; i++) {
+                writers.push({offset: 0});
+            }
+        }
     });
 
     QUnit.test('basic', function(assert) {
