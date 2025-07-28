@@ -1,15 +1,14 @@
-[ ] Expose mkdir, rmdir, lookup to JS
-[ ] Implement exists(), stat(), and expose
-[ ] Test this
+[ ] Finish rmdir implementation
 
-[ ] Implement opendir(), readdir(), closedir()
-[ ] Expose these to JS
-[ ] Test this
+[ ] Rework files so final block is not eagerly allocated
 
-[ ] Model-based testing framework
+[ ] Test outstanding operations
 
-[ ] Implement proper open() + internal version
-[ ] read(), write(), tell(), seek()
-[ ] Test this
+[ ] Full fuzz tester
+Implementation idea: after every operation that mutates the directory
+structure, dump the structure to JSON array (including inode numbers).
+Then - every fuzz operation just picks a random inode + operation.
+Another challenge is that there will need to be some smarts to avoid
+running out of blocks/inodes.
 
-[ ] Implement unlink()
+[ ] Docs
