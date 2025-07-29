@@ -271,9 +271,8 @@ function runTests() {
                     fileContents.length - w.offset
                 );
 
-                const val = Math.floor(Math.random() * 256);
                 const chunk = new Uint8Array(bytesToWrite);
-                chunk.fill(val);
+                chunk.fill(i % 256);
 
                 // write to the mock file
                 fileContents.subarray(w.offset, w.offset + bytesToWrite).set(chunk);
