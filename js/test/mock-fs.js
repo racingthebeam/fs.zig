@@ -274,13 +274,12 @@ function runTests() {
                 const chunk = new Uint8Array(bytesToWrite);
                 chunk.fill(i % 256);
 
-                // write to the mock file
-                fileContents.subarray(w.offset, w.offset + bytesToWrite).set(chunk);
-                w.offset += bytesToWrite;
-
                 // write to the real file
                 this.fs.write(w.fd, chunk);
 
+                // write to the mock file
+                fileContents.subarray(w.offset, w.offset + bytesToWrite).set(chunk);
+                w.offset += bytesToWrite;
                 if (w.offset > fileSize) {
                     fileSize = w.offset;
                 }
