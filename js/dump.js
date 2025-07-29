@@ -3,22 +3,24 @@ import { MaxTransferSize } from "../js/constants.js";
 export { dumpFile, dumpFileToString, dumpDir, dumpFS };
 
 function dumpFile(fs, inode) {
-    const stat = fs.stat(inode);
+    const size = fs.stat(inode).size;
     const fh = fs.open(inode, 0);
-    const out = new Uint8Array(stat.size);
-    
-    let offset = 0;
-    while (offset < stat.size) {
-        const bytesToRead = Math.min(MaxTransferSize, stat.size - offset);
-        const bytesRead = fs.read(out.subarray(offset, offset + bytesToRead), fh);
-        if (bytesToRead !== bytesRead) {
-            throw new Error(`Expected to read ${bytesToRead} bytes, but got ${bytesRead}`);
+
+    try {
+        const out = new Uint8Array(size);
+        let rp = 0;
+        while (rp < size) {
+            const bytesToRead = Math.min(MaxTransferSize, size - rp);
+            const bytesRead = fs.read(out.subarray(rp, rp + bytesToRead), fh);
+            if (bytesToRead !== bytesRead) {
+                throw new Error(`Expected to read ${bytesToRead} bytes, but got ${bytesRead}`);
+            }
+            rp += bytesRead;
         }
-        offset += bytesRead;
+        return out;
+    } finally {
+        fs.close(fh);
     }
-    
-    fs.close(fh);
-    return out;
 }
 
 function dumpFileToString(fs, inode) {
