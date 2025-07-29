@@ -233,7 +233,11 @@ function runTests() {
         });
     });
 
+    // perform a fuzz test with 10 simultaneous writers, 255 passes, 100-5000 ops per pass
     QUnit.test('read/write fuzz', function (assert) {
+        let totalBytesWritten = 0;
+        const start = Date.now();
+
         // 255 seems to be maximum number of assertions QUint allows
         for (let pass = 0; pass < 255; pass++) {
             const fileContents = new Uint8Array(MaxFileSize);
@@ -255,10 +259,10 @@ function runTests() {
 
                 // seek to a new point in the file sometimes
                 const p = Math.random();
-                if (p < 0.01) {
+                if (p < 0.05) { // seek to end
                     w.offset = fileSize;
                     this.fs.seek(w.fd, fileSize, 0);
-                } else if (p < 0.1) {
+                } else if (p < 0.2) { // seek to random offset
                     const newOffset = Math.floor(Math.random() * fileSize);
                     w.offset = newOffset;
                     this.fs.seek(w.fd, newOffset, 0);
@@ -281,6 +285,8 @@ function runTests() {
                 if (w.offset > fileSize) {
                     fileSize = w.offset;
                 }
+
+                totalBytesWritten += bytesToWrite;
             }
 
             // close the writers
@@ -288,22 +294,16 @@ function runTests() {
                 this.fs.close(w.fd);
             }
 
-            // read back the fill file from the filesystem
-            const fd = this.fs.open(inode);
-            const actual = new Uint8Array(fileSize);
-            let read = 0;
-            while (read < fileSize) {
-                const toRead = Math.min(1024, fileSize - read);
-                this.fs.read(actual.subarray(read, read + toRead), fd);
-                read += toRead;
-            }
-            this.fs.close(fd);
+            // read back the full file from the filesystem
+            const actual = dumpFile(this.fs, inode);
 
             // delete the filename
             this.fs.unlink(0, filename);
 
             assert.deepEqual(actual, fileContents.subarray(0, fileSize), `pass ${pass} (ops=${ops}, size=${fileSize})`);
         }
+
+        console.log(`wrote ${totalBytesWritten / 1048576}MiB in ${(Date.now() - start) / 1000}s`);
     });
 
     QUnit.test('basic', function (assert) {
