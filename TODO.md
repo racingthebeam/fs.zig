@@ -1,5 +1,7 @@
 [ ] Finish rmdir implementation
 
+[ ] Implement "move"
+
 [ ] Rework files so final block is not eagerly allocated
 
 [ ] Test outstanding operations
