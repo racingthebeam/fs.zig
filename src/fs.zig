@@ -533,10 +533,10 @@ pub const FileSystem = struct {
         fd.* = I.FileFd{
             .of = open_file,
             .flags = flags,
-            .refs_invalid = true,
-            .root = undefined,
+            .refs_invalid = false,
+            .root = Ref{ .blk = inode.data_blk, .offset = 0 },
             .mid = undefined,
-            .data = undefined,
+            .data = Ref{ .blk = readBE(u16, index_dat[0..2]), .offset = 0 },
             .abs_offset = 0,
             .deep = false,
         };
