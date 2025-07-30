@@ -1,8 +1,10 @@
+[x] Rework files so final block is not eagerly allocated
+[ ] write some tests designed to reveal any flaws in this new approach
+    - e.g. write to block boundary then read, seek to first block, etc.
+
 [ ] Finish rmdir implementation
 
 [ ] Implement "move"
-
-[ ] Rework files so final block is not eagerly allocated
 
 [ ] Test outstanding operations
 
