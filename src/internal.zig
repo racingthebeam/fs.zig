@@ -74,7 +74,7 @@ pub const OpenFile = struct {
 pub const FileFd = struct {
     of: *OpenFile = undefined,
     flags: u32 = undefined,
-
+    refs_invalid: bool = undefined,
     root: Ref = undefined, // position in the root block
     mid: Ref = undefined, // position in the indirect block (only valid when deep == true)
     data: Ref = undefined, // position in the data block

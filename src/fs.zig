@@ -120,15 +120,16 @@ pub const FileSystem = struct {
         // writing the data to the block device.
         @memset(config_out, 0);
         config_out[0] = P.FS_TYPE_ID;
-        config_out[1] = @truncate((inode_blk_count / BLOCK_COUNT_MULTIPLIER) - 1);
+        config_out[1] = 1; // version
+        config_out[2] = @truncate((inode_blk_count / BLOCK_COUNT_MULTIPLIER) - 1);
     }
 
     pub fn init(allocator: Allocator, blk_dev: *bd.BlockDevice, config: []u8) !FileSystem {
-        if (config.len != 16 or config[0] != P.FS_TYPE_ID) {
+        if (config.len != 16 or config[0] != P.FS_TYPE_ID or config[1] != 1) {
             return P.Error.InvalidFSParams;
         }
 
-        var inode_blk_count: u32 = config[1];
+        var inode_blk_count: u32 = config[2];
         inode_blk_count += 1;
         inode_blk_count *= BLOCK_COUNT_MULTIPLIER;
 
@@ -532,9 +533,10 @@ pub const FileSystem = struct {
         fd.* = I.FileFd{
             .of = open_file,
             .flags = flags,
-            .root = Ref{ .blk = inode.data_blk, .offset = 0 },
-            .mid = Ref{ .blk = 0, .offset = 0 },
-            .data = Ref{ .blk = readBE(u16, index_dat[0..2]), .offset = 0 },
+            .refs_invalid = true,
+            .root = undefined,
+            .mid = undefined,
+            .data = undefined,
             .abs_offset = 0,
             .deep = false,
         };
@@ -579,6 +581,11 @@ pub const FileSystem = struct {
 
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
+
+        if (fd.refs_invalid) {
+            self.updateRefs(fd);
+            std.debug.assert(!fd.refs_invalid);
+        }
 
         const bytes_to_read: u32 = @min(dst.len, of.size - fd.abs_offset);
         var bytes_read: u32 = 0;
@@ -627,6 +634,11 @@ pub const FileSystem = struct {
     fn writeInternal(self: *@This(), fd: *I.FileFd, buf: []const u8) !u32 {
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
+
+        if (fd.refs_invalid) {
+            self.updateRefs(fd);
+            std.debug.assert(!fd.refs_invalid);
+        }
 
         const bytes_to_write = buf.len;
         var bytes_written: u32 = 0;
@@ -764,7 +776,7 @@ pub const FileSystem = struct {
     //
     // Seek
 
-    fn seekInternal(self: *@This(), fd: *I.FileFd, new_abs_offset: u32) error{InvalidOffset}!void {
+    fn seekInternal(_: *@This(), fd: *I.FileFd, new_abs_offset: u32) error{InvalidOffset}!void {
         const of = fd.of;
 
         if (new_abs_offset == fd.abs_offset) {
@@ -773,12 +785,7 @@ pub const FileSystem = struct {
             return P.Error.InvalidOffset;
         }
 
-        if (new_abs_offset < self.indirect_offset_threshold) {
-            self.seekShallow(of, fd, new_abs_offset);
-        } else {
-            self.seekDeep(of, fd, new_abs_offset);
-        }
-
+        fd.refs_invalid = true;
         fd.abs_offset = new_abs_offset;
     }
 
@@ -786,11 +793,19 @@ pub const FileSystem = struct {
         self.seekInternal(fd, fd.of.size) catch @panic("seekEnd() failed - this is a bug");
     }
 
-    fn seekShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
+    fn updateRefs(self: *@This(), fd: *I.FileFd) void {
+        if (fd.abs_offset < self.indirect_offset_threshold) {
+            self.updateRefsShallow(fd.of, fd);
+        } else {
+            self.updateRefsDeep(fd.of, fd);
+        }
+    }
+
+    fn updateRefsShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd) void {
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
-        const offsets = self.calculateShallowOffsets(abs_offset);
+        const offsets = self.calculateShallowOffsets(fd.abs_offset);
 
         const root = I.Ref{
             .blk = of.*.root_blk,
@@ -807,11 +822,11 @@ pub const FileSystem = struct {
         };
     }
 
-    fn seekDeep(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
+    fn updateRefsDeep(self: *@This(), of: *I.OpenFile, fd: *I.FileFd) void {
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
-        const offsets = self.calculateDeepOffsets(abs_offset);
+        const offsets = self.calculateDeepOffsets(fd.abs_offset);
 
         const root = I.Ref{
             .blk = of.*.root_blk,
