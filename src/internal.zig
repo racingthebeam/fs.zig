@@ -74,6 +74,10 @@ pub const OpenFile = struct {
 pub const FileFd = struct {
     of: *OpenFile = undefined,
     flags: u32 = undefined,
+
+    // indicates the root, mid, and data Refs are invalid and must be recalculated.
+    // set this to true after seek so that we can delay block offset calculation
+    // until there's guaranteed to be a valid block
     refs_invalid: bool = undefined,
     root: Ref = undefined, // position in the root block
     mid: Ref = undefined, // position in the indirect block (only valid when deep == true)
