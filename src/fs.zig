@@ -776,6 +776,10 @@ pub const FileSystem = struct {
     //
     // Seek
 
+    fn seekEnd(self: *@This(), fd: *I.FileFd) void {
+        self.seekInternal(fd, fd.of.size) catch @panic("seekEnd() failed - this is a bug");
+    }
+
     fn seekInternal(_: *@This(), fd: *I.FileFd, new_abs_offset: u32) error{InvalidOffset}!void {
         const of = fd.of;
 
@@ -787,10 +791,6 @@ pub const FileSystem = struct {
 
         fd.refs_invalid = true;
         fd.abs_offset = new_abs_offset;
-    }
-
-    fn seekEnd(self: *@This(), fd: *I.FileFd) void {
-        self.seekInternal(fd, fd.of.size) catch @panic("seekEnd() failed - this is a bug");
     }
 
     fn updateRefs(self: *@This(), fd: *I.FileFd) void {
