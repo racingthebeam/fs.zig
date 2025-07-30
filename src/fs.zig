@@ -579,17 +579,27 @@ pub const FileSystem = struct {
     fn readInternal(self: *@This(), dst: []u8, fd: *I.FileFd) !struct { u32, bool } {
         const of = fd.of;
 
-        const scratch = self.blk_pool.take();
-        defer self.blk_pool.give(scratch);
+        const bytes_to_read: u32 = @min(dst.len, of.size - fd.abs_offset);
+        if (bytes_to_read == 0) {
+            return .{ 0, dst.len > 0 };
+        }
 
         if (fd.refs_invalid) {
+            // this is always safe to do because the fact there's data to read
+            // means the block refs must be valid.
             self.updateRefs(fd);
             std.debug.assert(!fd.refs_invalid);
         }
 
-        const bytes_to_read: u32 = @min(dst.len, of.size - fd.abs_offset);
+        const scratch = self.blk_pool.take();
+        defer self.blk_pool.give(scratch);
+
         var bytes_read: u32 = 0;
         while (bytes_read < bytes_to_read) {
+            if (fd.data.offset == self.blk_size) {
+                try self.advanceFilePointer(fd);
+            }
+
             const bytes_remaining = bytes_to_read - bytes_read;
             const bytes_to_read_from_blk: u32 = @min(bytes_remaining, self.blk_size - fd.data.offset);
 
@@ -599,10 +609,6 @@ pub const FileSystem = struct {
             fd.abs_offset += bytes_to_read_from_blk;
             fd.data.offset += bytes_to_read_from_blk;
             bytes_read += bytes_to_read_from_blk;
-
-            if (fd.data.offset == self.blk_size) {
-                try self.advanceFilePointer(fd);
-            }
         }
 
         // only return an EOF flag if we're both
@@ -632,17 +638,25 @@ pub const FileSystem = struct {
     }
 
     fn writeInternal(self: *@This(), fd: *I.FileFd, buf: []const u8) !u32 {
-        const scratch = self.blk_pool.take();
-        defer self.blk_pool.give(scratch);
+        const bytes_to_write = buf.len;
+        if (bytes_to_write == 0) {
+            return 0;
+        }
 
         if (fd.refs_invalid) {
             self.updateRefs(fd);
             std.debug.assert(!fd.refs_invalid);
         }
 
-        const bytes_to_write = buf.len;
+        const scratch = self.blk_pool.take();
+        defer self.blk_pool.give(scratch);
+
         var bytes_written: u32 = 0;
         while (bytes_written < bytes_to_write) {
+            if (fd.data.offset == self.blk_size) {
+                try self.advanceFilePointer(fd);
+            }
+
             const bytes_remaining = bytes_to_write - bytes_written;
             const bytes_to_write_to_blk = @min(bytes_remaining, self.blk_size - fd.data.offset);
 
@@ -653,10 +667,6 @@ pub const FileSystem = struct {
             fd.abs_offset += bytes_to_write_to_blk;
             fd.data.offset += bytes_to_write_to_blk;
             bytes_written += bytes_to_write_to_blk;
-
-            if (fd.data.offset == self.blk_size) {
-                try self.advanceFilePointer(fd);
-            }
         }
 
         if (fd.abs_offset > fd.of.size) {
@@ -794,18 +804,32 @@ pub const FileSystem = struct {
     }
 
     fn updateRefs(self: *@This(), fd: *I.FileFd) void {
-        if (fd.abs_offset < self.indirect_offset_threshold) {
-            self.updateRefsShallow(fd.of, fd);
+        // if we're at the end of the last block in the file we need to prime the read/write
+        // routines to call advanceFilePointer(). we do this by seeking one block back from
+        // the target and then setting the data offset to match the block size - a condition
+        // which will cause read/write to call advanceFilePointer().
+        const hack = (fd.abs_offset > 0 and fd.abs_offset == fd.of.size and (fd.abs_offset % self.blk_size) == 0);
+        const seek_offset = if (hack) fd.abs_offset - self.blk_size else fd.abs_offset;
+
+        if (seek_offset < self.indirect_offset_threshold) {
+            self.updateRefsShallow(fd.of, fd, seek_offset);
         } else {
-            self.updateRefsDeep(fd.of, fd);
+            self.updateRefsDeep(fd.of, fd, seek_offset);
         }
+
+        if (hack) {
+            std.debug.assert(fd.data.offset == 0);
+            fd.data.offset = self.blk_size;
+        }
+
+        fd.refs_invalid = false;
     }
 
-    fn updateRefsShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd) void {
+    fn updateRefsShallow(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
-        const offsets = self.calculateShallowOffsets(fd.abs_offset);
+        const offsets = self.calculateShallowOffsets(abs_offset);
 
         const root = I.Ref{
             .blk = of.*.root_blk,
@@ -822,11 +846,11 @@ pub const FileSystem = struct {
         };
     }
 
-    fn updateRefsDeep(self: *@This(), of: *I.OpenFile, fd: *I.FileFd) void {
+    fn updateRefsDeep(self: *@This(), of: *I.OpenFile, fd: *I.FileFd, abs_offset: u32) void {
         const scratch = self.blk_pool.take();
         defer self.blk_pool.give(scratch);
 
-        const offsets = self.calculateDeepOffsets(fd.abs_offset);
+        const offsets = self.calculateDeepOffsets(abs_offset);
 
         const root = I.Ref{
             .blk = of.*.root_blk,

@@ -14,7 +14,7 @@ const DirEntSize = 16;
 const DirEntsPerBlock = BlockSize / DirEntSize;
 const BlockPointersPerBlock = BlockSize / 2;
 const IndirectThreshold = (BlockPointersPerBlock / 2) * BlockSize;
-const MaxFileSize = IndirectThreshold + ((BlockPointersPerBlock / 2) * BlockPointersPerBlock * BlockSize) - 1;
+const MaxFileSize = IndirectThreshold + ((BlockPointersPerBlock / 2) * BlockPointersPerBlock * BlockSize);
 
 console.log("IndirectThreshold", IndirectThreshold);
 console.log("MaxFileSize", MaxFileSize);

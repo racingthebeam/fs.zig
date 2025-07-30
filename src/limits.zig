@@ -18,7 +18,7 @@ pub fn maxFileSize(blk_size: u32) u32 {
 
     // the current implementation automatically allocates a block
     // when we hit the end so the max size is actually one byte less.
-    return direct + indirect - 1;
+    return direct + indirect;
 }
 
 pub fn blocksForMaxFileSize(blk_size: u32) u32 {
