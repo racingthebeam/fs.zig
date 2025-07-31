@@ -278,24 +278,34 @@ test "InodeTable" {
 }
 
 const offset_flags = 0;
-const offset_unused = offset_flags + 2;
-const offset_data_blk = offset_unused + 2;
+const offset_ref_count = offset_flags + 2;
+const offset_unused = offset_ref_count + 1;
+const offset_data_blk = offset_unused + 1;
 const offset_meta_blk = offset_data_blk + 2;
-const offset_modified = offset_meta_blk + 2;
-const offset_size = offset_modified + 4;
+const offset_mtime = offset_meta_blk + 2;
+const offset_size = offset_mtime + 4;
+const offset_end = offset_size + 4;
+
+comptime {
+    if (offset_end != 16) {
+        @compileError("inode offset_end must be 16");
+    }
+}
 
 fn readEntry(ent: *Inode, src: []const u8) void {
     ent.flags = readBE(u16, src[offset_flags .. offset_flags + 2]);
+    ent.ref_count = src[offset_ref_count];
     ent.data_blk = readBE(u16, src[offset_data_blk .. offset_data_blk + 2]);
     ent.meta_blk = readBE(u16, src[offset_meta_blk .. offset_meta_blk + 2]);
+    ent.mtime = readBE(u32, src[offset_mtime .. offset_mtime + 4]);
     ent.size = readBE(u32, src[offset_size .. offset_size + 4]);
-    ent.mtime = readBE(u32, src[offset_modified .. offset_modified + 4]);
 }
 
 test "readEntry" {
     const buf = [_]u8{
         0xd, 0xe, // flags
-        0, 0, // unused
+        6, // refcount
+        0, // unused
         0x1, 0x2, // data
         0x3, 0x4, // meta
         0x5, 0x6, 0x7, 0x8, // modified
@@ -307,24 +317,32 @@ test "readEntry" {
     readEntry(&ent, &buf);
 
     try expect(ent.flags == 0x0d0e);
+    try expect(ent.ref_count == 6);
     try expect(ent.data_blk == 0x0102);
     try expect(ent.meta_blk == 0x0304);
-    try expect(ent.size == 0x090a0b0c);
     try expect(ent.mtime == 0x05060708);
+    try expect(ent.size == 0x090a0b0c);
 }
 
 fn writeEntry(dst: []u8, ent: *Inode) void {
     writeBE(u16, dst[offset_flags .. offset_flags + 2], ent.*.flags);
-    dst[offset_unused + 0] = 0;
-    dst[offset_unused + 1] = 0;
+    dst[offset_ref_count] = ent.ref_count;
+    dst[offset_unused] = 0;
     writeBE(u16, dst[offset_data_blk .. offset_data_blk + 2], ent.*.data_blk);
     writeBE(u16, dst[offset_meta_blk .. offset_meta_blk + 2], ent.*.meta_blk);
+    writeBE(u32, dst[offset_mtime .. offset_mtime + 4], ent.*.mtime);
     writeBE(u32, dst[offset_size .. offset_size + 4], ent.*.size);
-    writeBE(u32, dst[offset_modified .. offset_modified + 4], ent.*.mtime);
 }
 
 test "writeEntry" {
-    var ent = Inode{ .flags = 0x0e0d, .data_blk = 0x0201, .meta_blk = 0x0403, .mtime = 0x08070605, .size = 0x0c0b0a09 };
+    var ent = Inode{
+        .flags = 0x0e0d,
+        .ref_count = 10,
+        .data_blk = 0x0201,
+        .meta_blk = 0x0403,
+        .mtime = 0x08070605,
+        .size = 0x0c0b0a09,
+    };
 
     var buf = [_]u8{255} ** 16;
 
@@ -332,7 +350,8 @@ test "writeEntry" {
 
     const expected = [_]u8{
         0x0e, 0x0d, // flags
-        0, 0, // unused
+        10, // ref count
+        0, // unused
         0x02, 0x01, // data
         0x04, 0x03, // meta
         0x08, 0x07, 0x06, 0x05, // mod

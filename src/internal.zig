@@ -42,6 +42,7 @@ pub const InodePtr = u16;
 pub const InodePtrSize = @sizeOf(InodePtr);
 pub const Inode = struct {
     flags: u16 = 0,
+    ref_count: u8 = 0,
     data_blk: u16 = 0,
     meta_blk: u16 = 0,
     size: u32 = 0,
