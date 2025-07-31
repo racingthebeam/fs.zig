@@ -2,6 +2,20 @@
 [ ] write some tests designed to reveal any flaws in this new approach
     - e.g. write to block boundary then read, seek to first block, etc.
 
+[ ] rework the public interface:
+    - create(type) - create a file and return its inode
+    - purge(inode) - purge contents
+    - link(dir_inode, name, inode)
+    - unlink(dir_inode, name)
+
+If we do this it pushes responsibility to the VFS layer; for example it will
+be necessary for it to keep track of open/deleted files, handling the removal
+once the deletion has occurred.
+
+Wondering if it might just be simpler to keep things as-is and implement
+move/rename in the FS layer and deal with the complexity that comes along
+with it.
+
 [ ] Finish rmdir implementation
 
 [ ] Implement "move"
