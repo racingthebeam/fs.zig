@@ -50,9 +50,9 @@ pub const FileSystem = struct {
     // an open file, as well as tracking deletion, so that
     // contents may be purged on close.
     //
-    // any given file has at most one *OpenFile, regardless of
+    // any given inode has at most one *OpenFile, regardless of
     // how many active file handles exist.
-    open_file_state: OpenFiles,
+    open_inode_state: OpenFiles,
 
     // open file handles, indexed by public handle
     open_files: FileHandles,
@@ -146,7 +146,7 @@ pub const FileSystem = struct {
             .inodes = inodes,
             .freelist = freelist,
             .blk_pool = BlockPool.init(allocator, blk_dev.blk_size),
-            .open_file_state = OpenFiles.init(allocator),
+            .open_inode_state = OpenFiles.init(allocator),
             .open_files = FileHandles.init(allocator),
             .open_dirs = FileHandles.init(allocator),
             .seq = Seq.init(),
@@ -163,7 +163,7 @@ pub const FileSystem = struct {
         self.inodes.deinit();
         self.freelist.deinit();
         self.blk_pool.deinit();
-        self.open_file_state.deinit();
+        self.open_inode_state.deinit();
         self.open_files.deinit();
         self.open_dirs.deinit();
     }
@@ -260,7 +260,7 @@ pub const FileSystem = struct {
         const zeroes = [_]u8{0} ** I.DirEntSize;
         _ = self.writeInternal(&dir_fd, zeroes[0..16]) catch @panic("failed to zero dir entry in unlink() - this is a bug");
 
-        if (self.open_file_state.get(inode_ptr)) |of| {
+        if (self.open_inode_state.get(inode_ptr)) |of| {
             of.deleted = true;
         } else {
             self.purgeInode(inode_ptr);
@@ -508,7 +508,7 @@ pub const FileSystem = struct {
         defer self.blk_pool.give(index_dat);
         self.blk_dev.readBlock(index_dat, inode.data_blk) catch |err| I.noBlock(err);
 
-        const open_file = if (self.open_file_state.get(ptr)) |ex| block: {
+        const open_file = if (self.open_inode_state.get(ptr)) |ex| block: {
             // can't truncate file if it's already open
             // this limitation may be removed in the future but for now it's more complex to deal with than it's worth.
             if ((flags & P.TRUNCATE) > 0) {
@@ -526,7 +526,7 @@ pub const FileSystem = struct {
                 .deleted = false,
                 .ref_count = 1,
             };
-            self.open_file_state.put(ptr, of) catch |err| I.oom(err);
+            self.open_inode_state.put(ptr, of) catch |err| I.oom(err);
             break :block of;
         };
 
@@ -571,7 +571,7 @@ pub const FileSystem = struct {
             if (of.deleted) {
                 self.purgeInode(of.inode_ptr);
             }
-            std.debug.assert(self.open_file_state.remove(of.inode_ptr));
+            std.debug.assert(self.open_inode_state.remove(of.inode_ptr));
             self.allocator.destroy(of);
         }
     }
